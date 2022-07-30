@@ -127,3 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Visual Code workspace files.
+*.code-workspace
+
+# The cloned 'simple_deployment' repo.
+Deployment/simple_deployment

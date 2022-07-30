@@ -1,0 +1,23 @@
+
+
+aws: 
+  provider:     simple_azure
+  provisioner:  None
+  #location:     "eu-west-1"
+  #subnet:       "172.31.0.0/16"
+  #name:        "Name for the environment and used as identifier for hostnames, network, etc."
+  #keymap:       "de-latin1-nodeadkeys"
+  #admin_user:  "enter"
+  #admin_user_key: Nonw
+  #subscription_registration_key:  "-"
+  #registration_server:  "https://scc.suse.com"
+  #enable_root_login:  True
+  hosts:
+    - count:  1
+      prefix: saptune-tests-azure-12.3-
+      os:     sles4sap_12.3
+      size:   standard  
+    - count:  3
+      prefix: saptune-tests-azure-15.4-
+      os:     sles4sap_15.4
+      size:   standard  

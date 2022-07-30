@@ -1,0 +1,65 @@
+# We deploy one machine per SLES4SAP operatinng system on Azure, AWS and KVM
+# with the standards size (this will be mapped by "simple_deployment" to the
+# sizing of the individual infrastructures).
+#   - "provider"    (mandatory)   provider that should be used to deploy the machines
+#   - "provisioner" (mandatory)   provisioner that should be used to deploy the machines 
+#   - "hosts" ...
+{% for infra in 'azure', 'aws', 'kvm' %}
+{{ infra }}: 
+  provider:     simple_{{ infra }}
+  provisioner:  None
+  hosts:
+    {% for os in '12.3', '12.4', '12.5', '15', '15.1', '15.2', '15.3', '15.4' %}
+    - count:  1
+      prefix: saptune-tests-{{ infra }}-{{ os }}-
+      os:     sles4sap_{{ os }}
+      size:   standard  
+    {% endfor %}
+    # On AWS we need additional machines
+    {% if infra == 'aws' %}  
+    - count:  1
+      prefix: saptune-tests-{{ infra }}-{{ os }}-
+      os:     sles4sap_{{ os }}
+      size:   special 
+    {% endif %}
+{% endfor %}
+
+# Another AWS infrastructure we can use.
+aws_QA: 
+  provider:     simple_aws
+  provisioner:  None
+  hosts:
+    - count:  1
+      prefix: saptune-tests-{{ infra }}-{{ os }}-
+      os:     sles4sap_{{ os }}
+      size:   standard  
+
+#  Two existinng Power systmes.
+bare_metal_Intel:
+  provider:     fake_deplyoment
+  provisioner:  None 
+  hosts:
+    - count:  1
+      prefix: saptune-tests-intel-12.5-
+      os:     sles4sap_12.5
+      size:   standard  
+
+    - count:  1
+      prefix: saptune-tests-intel-15.3-     
+      os:     sles4sap_15.3
+      size:   standard  
+
+#  Two existing Intel systems.
+bare_metal_Power:
+  provider:     fake_deplyoment
+  provisioner:  None 
+  hosts:
+    - count:  1
+      prefix: saptune-tests-power-12.5-
+      os:     sles4sap_12.5
+      size:   standard  
+
+    - count:  1
+      prefix: saptune-tests-power-15.3-     
+      os:     sles4sap_15.3
+      size:   standard  

@@ -1,0 +1,57 @@
+defs:
+  os: ssss
+
+default:
+  prefix: saptune3_test_{{ default.infrastructure }}_{{ default.os }}_{{ default.size }}
+  infrastructure: aws
+  size: t3.nano
+  os:   sles4sap_15.1
+
+hosts:
+  - count:  3A
+  - count:  -1
+    os:     sles4sap_15.2
+  - count:          4
+    infrastructure: azure
+    size:           micro
+    os:             sles4sap_15.2
+
+
+
+
+
+What we have/nnneed
+
+  - some special instalaations on cloud vendors
+  - two existinng Poeer systmes
+  - two existing Intel systems
+
+# We deploy one machine per SLES4SAP operatinng system on Azure, AWS and KVM
+# with the standards size (this will be mapped by "simple_deployment" to the
+# sizing of the individual infrastructures).
+{% for infra in azure aws kvm %}
+{{ infra }}: 
+
+  hosts:
+    {% for os in 12.3 12.4 12.5 15 15.1 15.2 15.3 15.4 %}
+    - count:  1
+      prefix: saptune-tests-{{ infra }}-{{ os }}-     # Shall we use placeholder for index types???
+      os:     sles4sap_{{ os }}
+      size:   standard  
+    {% end &}
+{% end &}
+
+# On AWS we need additional machines
+azure: 
+    - count:  1
+      prefix: saptune-tests-{{ infra }}-{{ os }}-     # Shall we use placeholder for index types???
+      os:     sles4sap_{{ os }}
+      size:   standard  
+
+
+
+# There is a second KVM installation, that 
+kvm_qa:
+
+
+

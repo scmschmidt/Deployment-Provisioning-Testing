@@ -1,0 +1,61 @@
+#!/bin/bash
+set -u
+
+# Initializes the working directory for DPT by creating a hidden directory with configuration file
+# v0.1
+
+config_dir='.DTP'
+config_file="${config_dir}/config"
+
+build_dir='build'
+
+deploy_bin='deploy.py'
+deploy_link='deploy'
+
+# Create required directories.
+for dir in "${config_dir}" "${build_dir}" ; do 
+    if [ -e "${dir}" ] ; then 
+        echo "Directory \"${dir}\" already exists! Cannot initialize here." >&2
+        exit 1
+    else
+        if ! mkdir "${dir}" ; then 
+            echo "Could not create directory \"${dir}\"! Cannot initialize here." >&2
+            exit 1
+        fi 
+    fi
+done
+
+# Create hidden config directory and config file in the current one.
+if ! touch "${config_file}" ; then 
+    echo "Could not create configuration file \"${config_file}\"! Cannot initialize here." >&2
+    exit 1
+fi
+
+# The absolute path of the init script is the base directory for DTP.
+basepath=$(realpath -s "${0%/*}")
+
+# Writing base path to config.
+if ! echo "basepath: \"${basepath}\"" >> "${config_file}" ; then 
+    echo "Could not update configuration file \"${config_file}\"! Cannot initialize here." >&2
+    exit 1
+fi 
+
+echo "Setting DTP path to: ${basepath}"
+echo "Configuration \"${config_file}\" created."
+
+# Creating symlink to the binaries.
+if [ -e "${deploy_link}" ] ; then
+    echo "File \"${deploy_link}\" already exists! Terminate." >&2
+    exit 1
+else
+    if ln -s "${basepath}/${deploy_bin}" "${deploy_link}" ; then 
+        echo "Created link \"${deploy_link}\" to \"${basepath}/${deploy_bin}\"."
+    else 
+        echo "Could not create link to the deploy script \"${basepath}/${deploy_bin}\"! Terminate." >&2
+        exit 1
+
+    fi
+fi
+
+# Bye.
+exit 0
