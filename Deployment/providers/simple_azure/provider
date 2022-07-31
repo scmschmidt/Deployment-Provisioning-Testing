@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import sys
+import time
+import random
+
+print('Hallo')
+time.sleep(random.randint(1,3))
+
+
+rc = random.randint(0,1) 
+if rc != 0:
+    print('I had issues!', file=sys.stderr)
+else:
+    print('fertig')
+
+sys.exit(rc)

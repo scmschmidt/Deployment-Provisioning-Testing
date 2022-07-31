@@ -29,18 +29,22 @@ Changelog:
 
 """
 
+import argparse
+import concurrent.futures
 import os
 import pathlib
 import re
 import readchar
 import schema
 import shutil
+import subprocess
 import sys
 from typing import Tuple, Any
 import yaml
 import jinja2
 
 import pprint
+import time
 
 
 VERSION = 'v0.2'
@@ -110,12 +114,11 @@ def wait_for_key(text: str, mapping: dict) -> Any:
     and returns the associate string after the key has been pressed.
     """
 
-    print(text)
+    CLI.print_important(f'\n{text}')
     while True:
         k = readchar.readkey()
         if k in mapping.keys():
             return mapping[k]
-
 
 def load_config(config: str) -> dict:
     """
@@ -129,7 +132,6 @@ def load_config(config: str) -> dict:
         CLI.exit_on_error(f'Error reading config: {err}', 2)
     CLI.ok(f'Configuration "{config} loaded successfully.')
     return content
-
 
 def load_landscape(file: str) -> dict:
     """
@@ -146,10 +148,14 @@ def load_landscape(file: str) -> dict:
             content = yaml.safe_load(jinja2.Template(f.read()).render())
     except Exception as err:
         CLI.exit_on_error(f'Error reading landscape: {err}', 2)
+
+    # Check for an empty landscape.
+    if not content:
+        CLI.exit_on_error(f'The landscape "{file}" is empty!', 2)
+
     CLI.ok(f'Landscape "{file} loaded successfully.')
     return content
     
-
 def validate(landscape: dict, base_path: str) -> dict:
     """
     After schema validation additional checks are done not
@@ -164,10 +170,11 @@ def validate(landscape: dict, base_path: str) -> dict:
     """
 
     CLI.header('Validate landscape')
+
     landscape_schema = schema.Schema({
         object: {
             "provider": str,
-            "hosts": list
+            "hosts": list,
         }
     }, ignore_extra_keys=True)
 
@@ -187,7 +194,7 @@ def validate(landscape: dict, base_path: str) -> dict:
     msgs = ['Error during provider validation:']
     errors = False
     for name, config in landscape.items():
-        provider_path = f'''{base_path}/Deployment/providers/{config['provider']}/run.py'''
+        provider_path = f'''{base_path}/Deployment/providers/{config['provider']}/provider'''
         if not ( os.path.exists(provider_path) and os.access(provider_path, os.X_OK) ):
             msgs.append(f'''Provider "{config['provider']}": No executable "{provider_path}".''')
             errors = True
@@ -203,7 +210,6 @@ def validate(landscape: dict, base_path: str) -> dict:
     CLI.ok('All providers exist.')
 
     return infrastructures
-
 
 def setup_infrastructures(infrastructures: dir) -> None:
     """
@@ -223,45 +229,103 @@ def setup_infrastructures(infrastructures: dir) -> None:
             CLI.exit_on_error(f'Error setting up build directory for infrastructure "{infrastructure}": {err}', 2)
         CLI.ok(f'''Build directory for infrastructure "{infrastructure}" has bee set up at "{infrastructures[infrastructure]['build_path']}".''')
 
+def execute_provider(provider_def: Tuple) -> None:
+    """
+    Calls the given executable with the command and the config file as listed
+    in the given tuple.
+    We wait until the process returns. All output gets captured we print 
+    an info about the running process periodically to show life.
+    """
+    
+    name, executable, command, config_file = provider_def
+
+    # Starting the provider and wait for its return.
+    with subprocess.Popen([executable, command, config_file], 
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                         ) as proc:
+        CLI.print_info(f'Provider for "{name}" has been started. (PID: {proc.pid})')
+        c = 0
+        while proc.poll() == None:
+            c += 1
+            if c % 10 == 0:
+                CLI.print_info(f'Provider for "{name}" still running...')
+            time.sleep(.1)
+    
+    # Print results.
+    if proc.returncode == 0:
+        CLI.ok(f'Provider for "{name}" has terminated successfully.')
+        #print(proc.stdout.read())
+    else:
+        CLI.fail(f'Provider for "{name}" failed!\nreturncode: {proc.returncode}\nstderr:\n{proc.stderr.read()}')
+        #CLI.print_important(proc.stderr.read())
+    # Printing result
+    raise !!!!!!!
 
 
 def main():
 
+    # Parsing arguments.
+    parser = argparse.ArgumentParser(prog='dpt', 
+                                    usage='%(prog)s [--non-interactive] apply|destroy LANDSCAPE_FILE',
+                                    description='Manages the landscape defined in the landscape file.',
+                                    epilog='')
+    parser.add_argument('command', 
+                        metavar='apply|destroy',
+                        choices=['apply', 'destroy'],
+                        help='Command to execute.')
+    parser.add_argument('landscape', 
+                        metavar='LANDSCAPE_FILE',
+                        nargs='?',
+                        default='landscapes/landscape.yaml',
+                        help='Path to the (YAML) landscape definition.')
+    parser.add_argument('--non-interactive', 
+                        dest='interactive',
+                        action='store_false',
+                        help='Do not ask for permission before altering the landscape.')
+    args = parser.parse_args()
+
     # First we load the config.   DO WE REALLY NEED THIS??????????????????????????
     config = load_config('.DTP/config')
-
-    # We allow one optional argument: the landscape definition.
-    if len(sys.argv) > 2:
-        CLI.exit_on_error(f'Usage: {sys.argv[0]} [LANDSCAPEFILE]\nv{VERSION}')
 
     # Extract DTP base path from the link of this script.
     base_path = os.path.dirname(pathlib.Path(sys.argv[0]).resolve())
 
     # Load and validate landscape.
-    landscape_file = sys.argv[1] if len(sys.argv) == 2 else 'landscape.yaml'
-    landscape = load_landscape(landscape_file)
+    landscape = load_landscape(args.landscape)
     infrastructures = validate(landscape, base_path)
 
     # Create working data for the providers.
     setup_infrastructures(infrastructures)
-    
-    # Generating a report.
-    decision = wait_for_key("Shall we deploy [Y|n]", { 'Y': True, 'n': False}) 
 
-    if decision:
-        CLI.ok('Starting deployment...')
+    # If in interactive mode, we aks before we call to action.
+    if args.interactive:
+        doit = wait_for_key("Shall we deploy? [Y|n]", { 'Y': True, 'n': False}) 
     else:
-        CLI.exit_on_error('User interruption. Cleaning up...', 2)
+        doit = True
+
+    if doit:
+        CLI.header('Execute providers')
+
+        # Calling the providers of each infrastructure.
+        call_list = [(name, data['provider_path'], args.command, data['config_path']) for name, data in infrastructures.items()]
+        try:
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                executor.map(execute_provider, call_list)    
+        except Exception as err:
+            CLI.exit_on_error(f'Fatal error during provider execution: {err}', 3)
+
+        # Running provider in parallel.
 
 
-    # Running provider in parallel.
+        # Collecting results.
 
+        # Writing final report.
+        CLI.print_info("Deployment finished")
 
-    # Collecting results.
+    else:
+        CLI.exit_on_error('User interruption. Terminating.', 2)
 
-    # Writing final report.
-
-
+    print('WE NEED A SIGNAL HANDLER')
 
     # Bye.
     sys.exit(0)
