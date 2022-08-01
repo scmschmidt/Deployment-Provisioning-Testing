@@ -26,19 +26,22 @@ Changelog:
 30.07.2022      v0.2        - Landscape gets validated and checked as far as `deploy`
                               requires it. 
                             - The provider config gets created in the build directory.
-
+01.08.2022      v0.3        - So far we can start the providers.
 """
 
 import argparse
 import concurrent.futures
+import datetime
 import os
 import pathlib
 import re
 import readchar
 import schema
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 from typing import Tuple, Any
 import yaml
 import jinja2
@@ -47,7 +50,7 @@ import pprint
 import time
 
 
-VERSION = 'v0.2'
+VERSION = 'v0.3'
 AUTHOR = 'soeren.schmidt@suse.com'
 
 class CLI:
@@ -107,6 +110,48 @@ class CLI:
         print(f'{cls.RED}{text}{cls._END}', file=sys.stderr)
         sys.exit(exitcode)
 
+
+
+def signal_handler(signal, frame):
+    """ 
+    Terminate with exit code 1.
+    """
+    print(threading.active_count() )
+    time.sleep(3)
+    #sys.exit(1)
+
+def argument_parser() -> object:
+    """
+    Parses the arguments and return the argparse object.
+    """
+
+    parser = argparse.ArgumentParser(prog='dpt', 
+                                    usage='%(prog)s [--non-interactive] apply|deploy LANDSCAPE_FILE',
+                                    description='Manages the landscape defined in the landscape file.',
+                                    epilog='')
+    parser.add_argument('command', 
+                        metavar='deploy|destroy',
+                        choices=['deploy', 'destroy'],
+                        help='Command to execute.')
+    parser.add_argument('landscape', 
+                        metavar='LANDSCAPE_FILE',
+                        nargs='?',
+                        default='landscapes/landscape.yaml',
+                        help='Path to the (YAML) landscape definition.')
+    parser.add_argument('--non-interactive', 
+                        dest='interactive',
+                        action='store_false',
+                        help='Do not ask for permission before altering the landscape.')
+    return parser.parse_args()
+
+def spinner_generator() -> str:
+    """
+    Returns on each call the next char for a spinner.
+    """
+    spinner = '-\|/'
+    while True:
+        for char in spinner:
+            yield str(char)
 
 def wait_for_key(text: str, mapping: dict) -> Any:
     """
@@ -173,8 +218,8 @@ def validate(landscape: dict, base_path: str) -> dict:
 
     landscape_schema = schema.Schema({
         object: {
-            "provider": str,
-            "hosts": list,
+            'provider': str,
+            'hosts': list,
         }
     }, ignore_extra_keys=True)
 
@@ -194,16 +239,17 @@ def validate(landscape: dict, base_path: str) -> dict:
     msgs = ['Error during provider validation:']
     errors = False
     for name, config in landscape.items():
-        provider_path = f'''{base_path}/Deployment/providers/{config['provider']}/provider'''
+        provider_dir = f'''{base_path}/Deployment/providers/{config['provider']}'''
+        provider_path = f'{provider_dir}/provider'
         if not ( os.path.exists(provider_path) and os.access(provider_path, os.X_OK) ):
             msgs.append(f'''Provider "{config['provider']}": No executable "{provider_path}".''')
             errors = True
             continue 
         infrastructures[name] = {}
         infrastructures[name]['config'] = config
-        infrastructures[name]['provider_path'] = provider_path
-        infrastructures[name]['build_path'] = f'build/{name}'
-        infrastructures[name]['config_path'] = f'build/{name}/config'
+        infrastructures[name]['provider_dir'] = provider_dir
+        infrastructures[name]['build_dir'] = f'{os.getcwd()}/build/{name}'
+        infrastructures[name]['config']['name'] = name
         CLI.ok(f'Infrastructure "{name}" configured.')
     if errors: 
         CLI.exit_on_error('\n\t'.join(msgs), 2)
@@ -220,14 +266,14 @@ def setup_infrastructures(infrastructures: dir) -> None:
     CLI.header('Set up infrastructures')
     for infrastructure in infrastructures:
         try:
-            if os.path.exists(infrastructures[infrastructure]['build_path']):
-                shutil.rmtree(infrastructures[infrastructure]['build_path'])
-            os.mkdir(infrastructures[infrastructure]['build_path'], mode = 0o700)
-            with open(infrastructures[infrastructure]['config_path'], 'w') as f: 
-                f.write(yaml.safe_dump(infrastructures[infrastructure]['config']))
+            if os.path.exists(infrastructures[infrastructure]['build_dir']):
+                shutil.rmtree(infrastructures[infrastructure]['build_dir'])
+            os.mkdir(infrastructures[infrastructure]['build_dir'], mode = 0o700)
+            with open(f'''{infrastructures[infrastructure]['build_dir']}/config''', 'w') as f: 
+                f.write(yaml.safe_dump(infrastructures[infrastructure]))
         except Exception as err:
             CLI.exit_on_error(f'Error setting up build directory for infrastructure "{infrastructure}": {err}', 2)
-        CLI.ok(f'''Build directory for infrastructure "{infrastructure}" has bee set up at "{infrastructures[infrastructure]['build_path']}".''')
+        CLI.ok(f'''Build directory for infrastructure "{infrastructure}" has bee set up at "{infrastructures[infrastructure]['build_dir']}".''')
 
 def execute_provider(provider_def: Tuple) -> None:
     """
@@ -236,53 +282,38 @@ def execute_provider(provider_def: Tuple) -> None:
     We wait until the process returns. All output gets captured we print 
     an info about the running process periodically to show life.
     """
-    
-    name, executable, command, config_file = provider_def
 
-    # Starting the provider and wait for its return.
-    with subprocess.Popen([executable, command, config_file], 
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE
-                         ) as proc:
-        CLI.print_info(f'Provider for "{name}" has been started. (PID: {proc.pid})')
-        c = 0
-        while proc.poll() == None:
-            c += 1
-            if c % 10 == 0:
-                CLI.print_info(f'Provider for "{name}" still running...')
-            time.sleep(.1)
-    
-    # Print results.
-    if proc.returncode == 0:
-        CLI.ok(f'Provider for "{name}" has terminated successfully.')
-        #print(proc.stdout.read())
-    else:
-        CLI.fail(f'Provider for "{name}" failed!\nreturncode: {proc.returncode}\nstderr:\n{proc.stderr.read()}')
-        #CLI.print_important(proc.stderr.read())
-    # Printing result
-    raise !!!!!!!
+    name, provider_dir, command, build_dir = provider_def
+    executable = f'{provider_dir}/provider'
+
+    try:
+        start = time.time()
+        stdout_file = open(f'{build_dir}/stdout', 'w')
+        stderr_file = open(f'{build_dir}/stderr', 'w')
+        with subprocess.Popen([executable, command],
+                              stdout=stdout_file, stderr=stderr_file,
+                              cwd=build_dir,  
+                             ) as proc:
+            CLI.print_info(f'[{datetime.datetime.now()}] Provider for "{name}" has been started. (PID: {proc.pid})')
+            proc.wait()
+        stdout_file.close()
+        stderr_file.close()
+        end = time.time()
+        if proc.returncode == 0:
+            CLI.ok(f'Provider for "{name}" has terminated successfully. (Executed in {round(end-start, 1)}s)')
+        else:
+            CLI.fail(f'Provider for "{name}" failed with exit code {proc.returncode}! (Executed in {round(end-start, 1)}s)\n\t-> See "{build_dir}/stderr" for details')
+    except Exception as err:
+        CLI.fail(err)
 
 
 def main():
 
+    # Terminate nicely at ^C.
+    signal.signal(signal.SIGINT, signal_handler)
+
     # Parsing arguments.
-    parser = argparse.ArgumentParser(prog='dpt', 
-                                    usage='%(prog)s [--non-interactive] apply|destroy LANDSCAPE_FILE',
-                                    description='Manages the landscape defined in the landscape file.',
-                                    epilog='')
-    parser.add_argument('command', 
-                        metavar='apply|destroy',
-                        choices=['apply', 'destroy'],
-                        help='Command to execute.')
-    parser.add_argument('landscape', 
-                        metavar='LANDSCAPE_FILE',
-                        nargs='?',
-                        default='landscapes/landscape.yaml',
-                        help='Path to the (YAML) landscape definition.')
-    parser.add_argument('--non-interactive', 
-                        dest='interactive',
-                        action='store_false',
-                        help='Do not ask for permission before altering the landscape.')
-    args = parser.parse_args()
+    args = argument_parser()
 
     # First we load the config.   DO WE REALLY NEED THIS??????????????????????????
     config = load_config('.DTP/config')
@@ -306,26 +337,46 @@ def main():
     if doit:
         CLI.header('Execute providers')
 
+        CLI.warn('WE NEED A SIGNAL HANDLER')
+
         # Calling the providers of each infrastructure.
-        call_list = [(name, data['provider_path'], args.command, data['config_path']) for name, data in infrastructures.items()]
+        call_list = [(name, data['provider_dir'], args.command, data['build_dir']) for name, data in infrastructures.items()]
         try:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                executor.map(execute_provider, call_list)    
+        #     with concurrent.futures.ThreadPoolExecutor() as executor:
+        #         jobs = [executor.submit(execute_provider, params) for params in call_list]
+        #         spinner = spinner_generator()
+        #         start = time.time()
+        #         while len(jobs) > 0:
+        #             for job in jobs:
+        #                 CLI.print_fmt(f'Running: {len(jobs)}/{len(call_list)} ({round(time.time()-start,1)}s) {next(spinner)}', fmt=CLI.BOLD+CLI.CYAN, end='\r')
+        #                 if job.done():
+        #                     jobs.remove(job)
+        #                 time.sleep(.1)
+            jobs = [threading.Thread(target=execute_provider, args=(params,)) for params in call_list]
+            for job in jobs:
+                job.start()
+            spinner = spinner_generator()
+            start = time.time()
+            while len(jobs) > 0:
+                for job in jobs:
+                    CLI.print_fmt(f'Running: {len(jobs)}/{len(call_list)} ({round(time.time()-start,1)}s) {next(spinner)}', fmt=CLI.BOLD+CLI.CYAN, end='\r')
+                    if not job.is_alive():
+                        jobs.remove(job)
+                    time.sleep(.1)
+
         except Exception as err:
-            CLI.exit_on_error(f'Fatal error during provider execution: {err}', 3)
+            CLI.exit_on_error(f'[{datetime.datetime.now()}] Fatal error during provider execution: {err}', 3)
 
-        # Running provider in parallel.
-
-
-        # Collecting results.
-
-        # Writing final report.
-        CLI.print_info("Deployment finished")
+        CLI.print_info(f'[{datetime.datetime.now()}] Deployment finished')
 
     else:
         CLI.exit_on_error('User interruption. Terminating.', 2)
 
-    print('WE NEED A SIGNAL HANDLER')
+
+
+    # WE HAVE TO DEAL WITH ERRORS FROM THE PROVIDER
+    # NOW WE HAVE TO TAKE THE PROVIDER RESULT AND PLACE IT FOR THE PROVISIONER
+
 
     # Bye.
     sys.exit(0)
