@@ -47,13 +47,18 @@ Changelog:
 01.08.2022      v0.1        - and so it begins...
 """
 
+import copy
 import datetime
+import hashlib
+import jinja2
 import os
 import schema
 import sys
 import time
 import random
 import yaml
+
+import pprint
 
 
 VERSION = 'v0.1'
@@ -101,12 +106,14 @@ def load_and_vaildate(config_file: str) -> dict:
         'build_dir': str,
         'provider_dir': str,
         'config': {
-            'name': str,            # APPLY CLOUD PROVIDER AND HOSTNAME RESTRICTIONS
-            schema.Optional('admin_user'): schema.Regex('^.*$'),      # USER NAME RESTRICTIONS
+            'name': schema.Regex('^[a-z.][a-z0-9.-]{1,40}$',
+                                 error='"name" must be a string matching "^[a-z.][a-z0-9.-]{1,40}$".'),
+            schema.Optional('admin_user'): schema.Regex('^[a-z][-a-z0-9]*$',
+                                                       error='"name" must be a string matching "^[a-z.][a-z0-9.-]{1,40}$".'),
             'admin_user_key': str,
             schema.Optional('enable_root_login'): bool,
             schema.Optional('keymap'): str,
-            schema.Optional('location'): str,
+            'location': str,
             'provider': str,
             schema.Optional('provisioner'): str,
             schema.Optional('registration_server'): str,
@@ -118,7 +125,8 @@ def load_and_vaildate(config_file: str) -> dict:
                                     lambda n: True if isinstance(n, int) and n >= 1 else False,
                                     error='"count" must be an integer greater than 1'),
                 schema.Optional('size'): str,
-                schema.Optional('os'): str
+                schema.Optional('os'): str,
+                schema.Optional('labels'): list
             }]
         }
 
@@ -136,6 +144,72 @@ def load_and_vaildate(config_file: str) -> dict:
 
     return content
 
+def make_plan(config: dict) -> None:
+    """
+    Uses config and the templates to create 
+    a the terraform plan for 'simple_deployment'.
+    """
+
+    template = f'''{config['provider_dir']}/templates/main.tf.template'''
+    terraform_dir = 'terraform'
+    terraform_file = f'{terraform_dir}/main.tf'
+
+    # Generate machine description.
+    # To avoid unnecessary machine destruction and creation if count changes,
+    # each configuration gets an id (hash of the configuration), which is used
+    # in the names of the machines. 
+    machine_definition = {}
+    try: 
+        for block in config['config']['hosts']:
+
+            # Create the hash of the machine configuration.
+            machine_config = copy.deepcopy(block) 
+            del(machine_config['count'])
+            hash = hashlib.blake2s(yaml.dump(machine_config).encode('utf-8'), digest_size=8).hexdigest()
+
+            # Create a new entry, if the config is new.
+            if hash not in machine_definition:
+                machine_definition[hash] = { 'current': 0, 'config': machine_config, 'names': [] }
+                index = 1
+            
+            # Add hosts.
+            for index in range(machine_definition[hash]['current'], machine_definition[hash]['current']+block['count']):
+                machine_definition[hash]['names'].append(f'{hash}_{index}')
+            machine_definition[hash]['current'] = index + 1
+    except Exception as err:
+        log(f'Generating machine description failed: {err}', 'err')
+        sys.exit(1)
+
+    # Now we prepare a machine dict to be used by the template.
+    machines = []
+    for _, data in machine_definition.items():
+        for name in data['names']:
+            machines.append({
+                'name': f'''{config['config']['name']}_{name}''',
+                'size': data['config']['size'], 
+                'os': data['config']['os']
+            })
+    config['config']['machines'] = machines
+    log(f'Generated machine definition: {machines}')
+
+    # Fill in the template.
+    try: 
+        with open(template) as f:
+            plan = jinja2.Template(f.read()).render(config['config'])
+    except Exception as err:
+        log(f'Error reading landscape: {err}', 'err')
+        sys.exit(1)
+
+    # Save plan.
+    try:
+        if not os.path.exists(terraform_dir):
+            os.mkdir(terraform_dir, mode = 0o700)
+        with open(terraform_file, 'w') as f:
+            f.write(plan)
+    except Exception as err:
+        log(f'Error writing the plan file: {err}', 'err')
+        sys.exit(1)
+
 
 def main():
 
@@ -149,6 +223,10 @@ def main():
 
 
     # Create terraform plan from templates.
+    plan = make_plan(config)
+
+    # Generate/Save image and size files
+
 
     # Do we do a terraform init????
 

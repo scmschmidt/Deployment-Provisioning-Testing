@@ -1,0 +1,47 @@
+module "simple_azure" {
+
+  # Path to the module.
+  source = "git::https://github.com/scmschmidt/simple_deployment.git//modules/simple_azure"
+  
+  # Region and used subnet.
+  location = "{{ location }}"
+  {% if subnet %}subnet   = "{{ subnet }}"{% endif %}
+  
+  # The name prefix for our resources.
+  name = "{{ name }}"
+
+  # Map of the machines to create. Each machine has a unique id with a tuple of 'size' and 'image'.
+  machines = {
+    {% for machine in machines %}    
+    "{{ machine.name }}" = ["{{ machine.size }}", "{{ machine.os }}"]    {% endfor %}
+  }
+
+
+  # Keyboard settings.
+  {% if keymap %}keymap = "{{ keymap }}"{% endif %}
+
+  # Our logon user with SSH public key.
+  {% if admin_user %}admin_user     = "{{ admin_user }}"{% endif %}
+  admin_user_key = "{{ admin_user_key }}" 
+
+  # Server and key to register the SLES.
+  {% if subscription_registration_key %}subscription_registration_key = "{{ subscription_registration_key }}"{% endif %}
+  {% if registration_server %}registration_server           = "{{ registration_server }}"{% endif %}
+
+  # We also want to logon as root.
+  {% if enable_root_login %}enable_root_login = {{ enable_root_login }}{% endif %}
+}
+
+
+output "test_machines" {
+  value = [
+    for name, info in module.test_landscape_B.machine_info :
+    "${name} : ${info.size}/${info.image} -> ${info.ip_address}"
+  ]
+  description = "Information about the instances."
+  sensitive   = false
+}
+
+
+
+
