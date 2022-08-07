@@ -16,7 +16,8 @@ Ideas:
     - 
 
 ToDo:
-    - Schema needs improvement
+    - We need to capture ^C
+    - Add commands for viewing the provider/provisioner outputs.
 
 
 

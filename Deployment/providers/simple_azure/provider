@@ -53,6 +53,7 @@ import hashlib
 import jinja2
 import os
 import schema
+import subprocess
 import sys
 import time
 import random
@@ -66,17 +67,22 @@ AUTHOR = 'soeren.schmidt@suse.com'
 
 def log(text: str, level: str='info' ) -> None:
     """
-    Prints the text to stdout or stderr preceded by a timestamp. 
+    Prints the text to stdout preceded by timestamp and category. 
     """
-    dest = sys.stderr if level in ['err','error'] else sys.stdout
-    print(f'[{datetime.datetime.now()}] {text}', file=dest)
+    category = {'info': 'INFO',
+                'success': ' OK ',
+                'fail': 'FAIL' 
+               }[level]
+    print(f'[{datetime.datetime.now()}] [{category}] {text}', file=sys.stdout)
 
 def bye(rc: int=0) -> None:
     """
     Logs termination message and exits with given exit code.
     """
-
-    log(f'Terminating with exit code {rc}')
+    if rc == 0:
+        log(f'Terminating successfully (exit code {rc}).', 'success')
+    else:
+        log(f'Terminating with failure (exit code {rc})!', 'fail')
     sys.exit(rc)
 
 def load_and_vaildate(config_file: str) -> dict:
@@ -92,14 +98,14 @@ def load_and_vaildate(config_file: str) -> dict:
         with open(config_file) as f:
             content = yaml.safe_load(f)
     except Exception as err:
-        log(f'Error reading landscape: {err}', 'err')
-        sys.exit(1)
-    log(f'Landscape "{config_file} loaded successfully.')
+        log(f'Error reading landscape: {err}', 'fail')
+        bye(1)
+    log(f'Landscape "{config_file}" loaded successfully.')
 
     # Check for an empty config.
     if not content:
-        log(f'The landscape "{config_file}" is empty!', 'err')
-        sys.exit(1)
+        log(f'The landscape "{config_file}" is empty!', 'fail')
+        bye(1)
 
     # Validate against schema.
     config_schema = schema.Schema({
@@ -127,7 +133,9 @@ def load_and_vaildate(config_file: str) -> dict:
                 schema.Optional('size'): str,
                 schema.Optional('os'): str,
                 schema.Optional('labels'): list
-            }]
+            }],
+            'images': dict, # MUST BE MORE DETAILED!
+            'sizing': dict  # MUST BE MORE DETAILED!
         }
 
     }, ignore_extra_keys=False)
@@ -138,8 +146,8 @@ def load_and_vaildate(config_file: str) -> dict:
         for err in se.errors + se.autos:
             if err:
                 msgs.append(err)
-        log('\n\t'.join(msgs), 'err')
-        sys.exit(1)
+        log('\n\t'.join(msgs), 'fail')
+        bye(1)
     log('Schema validation passed.')
 
     return content
@@ -177,8 +185,8 @@ def make_plan(config: dict) -> None:
                 machine_definition[hash]['names'].append(f'{hash}_{index}')
             machine_definition[hash]['current'] = index + 1
     except Exception as err:
-        log(f'Generating machine description failed: {err}', 'err')
-        sys.exit(1)
+        log(f'Generating machine description failed: {err}', 'fail')
+        bye(1)
 
     # Now we prepare a machine dict to be used by the template.
     machines = []
@@ -190,15 +198,14 @@ def make_plan(config: dict) -> None:
                 'os': data['config']['os']
             })
     config['config']['machines'] = machines
-    log(f'Generated machine definition: {machines}')
 
     # Fill in the template.
     try: 
         with open(template) as f:
             plan = jinja2.Template(f.read()).render(config['config'])
     except Exception as err:
-        log(f'Error reading landscape: {err}', 'err')
-        sys.exit(1)
+        log(f'Error reading landscape: {err}', 'fail')
+        bye(1)
 
     # Save plan.
     try:
@@ -207,9 +214,51 @@ def make_plan(config: dict) -> None:
         with open(terraform_file, 'w') as f:
             f.write(plan)
     except Exception as err:
-        log(f'Error writing the plan file: {err}', 'err')
-        sys.exit(1)
+        log(f'Error writing the plan file: {err}', 'fail')
+        bye(1)
 
+def write_map(config: dict, section: str, file: str) -> None:
+    """
+    Writes section of config into a file. 
+    Either the 'default' subsection or the 'location` part is written
+    into the file, depending if there is a location subsection.
+    """
+
+    try:
+        location = config['config']['location']
+        if location not in config['config'][section]:
+            subsection = 'default'
+            log(f'''Preparing "{file}": Section "{location}" not found in config, using "default".''')
+        else:
+            subsection = location
+            log(f'''Preparing "{file}": Section "{location}" found in config.''')
+            
+        with open(file, 'w') as f:
+            f.write(yaml.dump(config['config'][section][subsection]))
+    except Exception as err:
+        log(f'Error writing "{section}" to file: {err}', 'fail')
+        bye(1)
+    log(f'File "{file}" written.', 'success')
+
+def execute(command: str) -> None:
+    """
+    Executes the command and logs stdout and stcerr.
+    Terminates on failure.
+    """ 
+
+    try:
+        with subprocess.Popen(command.split(), 
+                              stdout = subprocess.PIPE, 
+                              stderr = subprocess.STDOUT,
+                              encoding = 'utf-8'
+                             ) as proc:
+            while proc.poll() is None:
+                for line in proc.stdout.readlines():
+                    log(f'{command}: {line.strip()}')                    
+                          
+    except Exception as err:
+        log(f'Execution of "{command}" failed: {err}', 'fail')
+        bye(1)      
 
 def main():
 
@@ -219,33 +268,31 @@ def main():
     # Load and validate configuration file.
     config = load_and_vaildate('config')
 
-    log(config)
-
-
     # Create terraform plan from templates.
-    plan = make_plan(config)
+    make_plan(config)
 
     # Generate/Save image and size files
+    write_map(config, 'images','images_azure.yaml')
+    write_map(config, 'sizing', 'sizing_azure.yaml')
 
+    # Executing `terraform init`.
+    # WE NEED TO CHECK UPGRADE OPTION!
+    # WE NEED TO CREATE THE TERRAFORM DIR!
+    #execute('terraform init')
 
-    # Do we do a terraform init????
+    # Executing `terraform plan`.
+
 
     # Depending on the command, we apply or destroy.
 
     # Create result file.
 
-    # Do something.
-    time.sleep(random.randint(1,3))
-    rc = random.randint(0,1) 
-    if rc != 0:
-        log('I had issues!', 'err')
-    else:
-        log('fertig')
 
+    print('SCHEMA MUST GET MORE DETAILS')
 
 
     # Say good bye.
-    bye(rc)
+    bye(0)
 
 
 if __name__ == '__main__':
