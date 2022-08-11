@@ -65,6 +65,7 @@ import pprint
 VERSION = 'v0.1'
 AUTHOR = 'soeren.schmidt@suse.com'
 
+
 def log(text: str, level: str='info' ) -> None:
     """
     Prints the text to stdout preceded by timestamp and category. 
@@ -112,6 +113,8 @@ def load_and_vaildate(config_file: str) -> dict:
         'build_dir': str,
         'provider_dir': str,
         'config': {
+
+            # Azure requirement: may not contain the special characters: `\/"[]:|<>+=;,?*@&~!#$%^()_{}
             'name': schema.Regex('^[a-z.][a-z0-9.-]{1,40}$',
                                  error='"name" must be a string matching "^[a-z.][a-z0-9.-]{1,40}$".'),
             schema.Optional('admin_user'): schema.Regex('^[a-z][-a-z0-9]*$',
@@ -182,7 +185,7 @@ def make_plan(config: dict) -> None:
             
             # Add hosts.
             for index in range(machine_definition[hash]['current'], machine_definition[hash]['current']+block['count']):
-                machine_definition[hash]['names'].append(f'{hash}_{index}')
+                machine_definition[hash]['names'].append(f'{hash}-{index}')
             machine_definition[hash]['current'] = index + 1
     except Exception as err:
         log(f'Generating machine description failed: {err}', 'fail')
@@ -193,7 +196,7 @@ def make_plan(config: dict) -> None:
     for _, data in machine_definition.items():
         for name in data['names']:
             machines.append({
-                'name': f'''{config['config']['name']}_{name}''',
+                'name': f'''{config['config']['name']}-{name}''',
                 'size': data['config']['size'], 
                 'os': data['config']['os']
             })
@@ -240,25 +243,77 @@ def write_map(config: dict, section: str, file: str) -> None:
         bye(1)
     log(f'File "{file}" written.', 'success')
 
-def execute(command: str) -> None:
+def terraform(command: list) -> None:
     """
-    Executes the command and logs stdout and stcerr.
+    Executes the terraform command and logs stdout and stderr.
+    The execution will be done in a subdirectory ``terraform``,
+    which must exist and contain a ``main.tf`` file.
+
+    The output will be logged continuously and also
+    returned.  
+    
     Terminates on failure.
     """ 
 
+    terraform_dir = 'terraform'
+
+    environment = os.environ.copy()
+    environment['TF_IN_AUTOMATION'] = '1'
+    
+    command.insert(0, 'terraform')
+    command_string = ' ' .join(command)
+
+    output = []
+
+    log(f'Run now "{command_string}"')
     try:
-        with subprocess.Popen(command.split(), 
+        with subprocess.Popen(command, 
                               stdout = subprocess.PIPE, 
                               stderr = subprocess.STDOUT,
-                              encoding = 'utf-8'
+                              encoding = 'utf-8',
+                              cwd = terraform_dir,
+                              env = environment
                              ) as proc:
             while proc.poll() is None:
                 for line in proc.stdout.readlines():
-                    log(f'{command}: {line.strip()}')                    
+                    log(f'{command_string}: {line.strip()}')  
+                    output.append(line.strip())
+
+            if proc.returncode != 0:
+                raise ValueError(f'terraform exited with return code {proc.returncode}.')
                           
     except Exception as err:
-        log(f'Execution of "{command}" failed: {err}', 'fail')
-        bye(1)      
+        log(f'Execution of "{command_string}" failed: {err}', 'fail')
+        bye(1) 
+
+    return output     
+
+def write_output_file(filename: str, content: str) -> None:
+    """
+    Writes content to file.
+    """
+
+    try: 
+        with open(filename, 'w') as f:
+            f.write(content)
+    except Exception as err: 
+        log(f'Error writing file "{filename}": {err}', 'fail')
+        bye(1)
+    log(f'File "{filename}" written.', 'success')
+
+def delete(filename: str) -> None:
+    """
+    Simply deletes a file.
+    """
+    if os.path.exists(filename):
+        try: 
+            os.remove(filename)
+        except Exception as err: 
+            log(f'Error removing unused file "{filename}": {err}', 'fail')
+            bye(1)
+        log(f'File "{filename}" deleted.', 'success')
+    else:
+        log(f'File "{filename}" does not exist. nothing to delete.', 'success')
 
 def main():
 
@@ -272,21 +327,30 @@ def main():
     make_plan(config)
 
     # Generate/Save image and size files
-    write_map(config, 'images','images_azure.yaml')
-    write_map(config, 'sizing', 'sizing_azure.yaml')
+    write_map(config, 'images', 'terraform/images_azure.yaml')
+    write_map(config, 'sizing', 'terraform/sizing_azure.yaml')
 
+    # Now we call terraform.
+    # Recommendations for terraform options come from: 
+    # https://learn.hashicorp.com/tutorials/terraform/automate-terraform?in=terraform/automation&utm_source=WEBSITE&utm_medium=WEB_IO&utm_offer=ARTICLE_PAGE&utm_content=DOCS
+    
     # Executing `terraform init`.
     # WE NEED TO CHECK UPGRADE OPTION!
-    # WE NEED TO CREATE THE TERRAFORM DIR!
-    #execute('terraform init')
+    terraform(['init', '-input=false'])
 
     # Executing `terraform plan`.
-
+    terraform(['plan', '-input=false'])
 
     # Depending on the command, we apply or destroy.
+    terraform([sys.argv[1], '-input=false', '-auto-approve'])
 
-    # Create result file.
+    # Create result file or ...
+    if sys.argv[1] == 'apply':
+        write_output_file('terraform/output.json', terraform(['output', '-json'], ))
 
+    # ... delete result file.
+    if sys.argv[1] == 'destroy':
+        delete('terraform/output.json')
 
     print('SCHEMA MUST GET MORE DETAILS')
 

@@ -373,7 +373,8 @@ def main():
     else:
         CLI.exit_on_error('User interruption. Terminating.', 2)
 
-
+    # Translate commands into terraform commands
+    #terraform_command = {'deploy': 'apply', 'destroy'}[sys.argv[1]]
 
     # WE HAVE TO DEAL WITH ERRORS FROM THE PROVIDER
     # NOW WE HAVE TO TAKE THE PROVIDER RESULT AND PLACE IT FOR THE PROVISIONER

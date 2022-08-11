@@ -29,13 +29,13 @@ module "simple_azure" {
   {% if registration_server %}registration_server           = "{{ registration_server }}"{% endif %}
 
   # We also want to logon as root.
-  {% if enable_root_login %}enable_root_login = {{ enable_root_login }}{% endif %}
+  {% if enable_root_login %}enable_root_login = {{ enable_root_login|lower }}{% endif %}
 }
 
 
 output "test_machines" {
   value = [
-    for name, info in module.test_landscape_B.machine_info :
+    for name, info in module.simple_azure.machine_info :
     "${name} : ${info.size}/${info.image} -> ${info.ip_address}"
   ]
   description = "Information about the instances."
