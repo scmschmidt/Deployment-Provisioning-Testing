@@ -13,7 +13,7 @@ module "simple_azure" {
   # Map of the machines to create. Each machine has a unique id with a tuple of 'size' and 'image'.
   machines = {
     {% for machine in machines %}    
-    "{{ machine.name }}" = ["{{ machine.size }}", "{{ machine.os }}"]    {% endfor %}
+    "{{ machine.shortname }}" = ["{{ machine.size }}", "{{ machine.os }}"]    {% endfor %}
   }
 
 
@@ -33,10 +33,10 @@ module "simple_azure" {
 }
 
 
-output "test_machines" {
+output "machines" {
   value = [
     for name, info in module.simple_azure.machine_info :
-    "${name} : ${info.size}/${info.image} -> ${info.ip_address}"
+    "${name} ${info.ip_address}"
   ]
   description = "Information about the instances."
   sensitive   = false
