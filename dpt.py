@@ -16,7 +16,8 @@ Ideas:
     - 
 
 ToDo:
-    - We need to capture ^C
+    - We need to capture ^C   (atexit???)
+    - Provider requires implementation of "excluded_hosts" (terraform's lifecycle feature)
     - Add commands for viewing the provider/provisioner outputs.
 
 
@@ -127,7 +128,7 @@ def argument_parser() -> object:
     """
 
     parser = argparse.ArgumentParser(prog='dpt', 
-                                    usage='%(prog)s [--non-interactive] apply|deploy LANDSCAPE_FILE',
+                                    usage='%(prog)s [--non-interactive] deploy|destroy LANDSCAPE_FILE',
                                     description='Manages the landscape defined in the landscape file.',
                                     epilog='')
     parser.add_argument('command', 
@@ -166,6 +167,7 @@ def wait_for_key(text: str, mapping: dict) -> Any:
         if k in mapping.keys():
             return mapping[k]
 
+# DO WE NEED THIS???????)
 def load_config(config: str) -> dict:
     """
     Loads the config.
@@ -181,17 +183,22 @@ def load_config(config: str) -> dict:
 
 def load_landscape(file: str) -> dict:
     """
-    Loads the landscape file (YAML) into a dictionary.
+    Loads the given landscape file (YAML).
     Terminates with error message and exit code 2 on failure.
 
     The landscape file is first rendered by Jinja2, then interpreted
-    as YAML.
+    as YAML. THe directory where the file is in, will be used as a 
+    template directory for Jinja2. Therefore extending and including 
+    is possible.
     """
 
     CLI.header('Load landscape')
     try: 
-        with open(file) as f:
-            content = yaml.safe_load(jinja2.Template(f.read()).render())
+        dirname, filename = os.path.split(file)
+        env = jinja2.Environment(loader=jinja2.FileSystemLoader(dirname))
+        template = env.get_template(filename)
+        content = yaml.safe_load(template.render())
+        pprint.pprint(content)
     except Exception as err:
         CLI.exit_on_error(f'Error reading landscape: {err}', 2)
 
@@ -267,9 +274,8 @@ def setup_infrastructures(infrastructures: dir) -> None:
     CLI.header('Set up infrastructures')
     for infrastructure in infrastructures:
         try:
-            if os.path.exists(infrastructures[infrastructure]['build_dir']):
-                shutil.rmtree(infrastructures[infrastructure]['build_dir'])
-            os.mkdir(infrastructures[infrastructure]['build_dir'], mode = 0o700)
+            if not os.path.exists(infrastructures[infrastructure]['build_dir']):
+                os.mkdir(infrastructures[infrastructure]['build_dir'], mode = 0o700)
             with open(f'''{infrastructures[infrastructure]['build_dir']}/config''', 'w') as f: 
                 f.write(yaml.safe_dump(infrastructures[infrastructure]))
         except Exception as err:
@@ -280,7 +286,7 @@ def execute_provider(provider_def: Tuple) -> None:
     """
     Calls the given executable with the command and the config file as listed
     in the given tuple.
-    We wait until the process returns. All output gets captured we print 
+    We wait until the process returns. All output gets captured and we print 
     an info about the running process periodically to show life.
     """
 
@@ -289,21 +295,20 @@ def execute_provider(provider_def: Tuple) -> None:
 
     try:
         start = time.time()
-        stdout_file = open(f'{build_dir}/stdout', 'w')
-        stderr_file = open(f'{build_dir}/stderr', 'w')
+        output_file = open(f'{build_dir}/output', 'w')
         with subprocess.Popen([executable, command],
-                              stdout=stdout_file, stderr=stderr_file,
+                              stdout=output_file, 
+                              stderr = subprocess.STDOUT,
                               cwd=build_dir,  
                              ) as proc:
             CLI.print_info(f'[{datetime.datetime.now()}] Provider for "{name}" has been started. (PID: {proc.pid})')
             proc.wait()
-        stdout_file.close()
-        stderr_file.close()
+        output_file.close()
         end = time.time()
         if proc.returncode == 0:
             CLI.ok(f'Provider for "{name}" has terminated successfully. (Executed in {round(end-start, 1)}s)')
         else:
-            CLI.fail(f'Provider for "{name}" failed with exit code {proc.returncode}! (Executed in {round(end-start, 1)}s)\n\t-> See "{build_dir}/stderr" for details')
+            CLI.fail(f'Provider for "{name}" failed with exit code {proc.returncode}! (Executed in {round(end-start, 1)}s)\n\t-> See "{output_file.name}" for details')
     except Exception as err:
         CLI.fail(err)
 
@@ -326,58 +331,59 @@ def main():
     landscape = load_landscape(args.landscape)
     infrastructures = validate(landscape, base_path)
 
-    # Create working data for the providers.
-    setup_infrastructures(infrastructures)
+    # Command switch.
+    sys.exit(0)
 
-    # If in interactive mode, we aks before we call to action.
-    if args.interactive:
-        doit = wait_for_key("Shall we deploy? [Y|n]", { 'Y': True, 'n': False}) 
-    else:
-        doit = True
+    # These are commands intended for the provider.
+    if args.command in ['deploy', 'destroy']:
 
-    if doit:
-        CLI.header('Execute providers')
+        # Create working data for the providers.
+        setup_infrastructures(infrastructures)
 
-        CLI.warn('WE NEED A SIGNAL HANDLER')
+        # If in interactive mode, we aks before we call to action.
+        if args.interactive:
+            doit = wait_for_key("Shall we deploy? [Y|n]", { 'Y': True, 'n': False}) 
+        else:
+            doit = True
 
-        # Calling the providers of each infrastructure.
-        call_list = [(name, data['provider_dir'], args.command, data['build_dir']) for name, data in infrastructures.items()]
-        try:
-        #     with concurrent.futures.ThreadPoolExecutor() as executor:
-        #         jobs = [executor.submit(execute_provider, params) for params in call_list]
-        #         spinner = spinner_generator()
-        #         start = time.time()
-        #         while len(jobs) > 0:
-        #             for job in jobs:
-        #                 CLI.print_fmt(f'Running: {len(jobs)}/{len(call_list)} ({round(time.time()-start,1)}s) {next(spinner)}', fmt=CLI.BOLD+CLI.CYAN, end='\r')
-        #                 if job.done():
-        #                     jobs.remove(job)
-        #                 time.sleep(.1)
-            jobs = [threading.Thread(target=execute_provider, args=(params,)) for params in call_list]
-            for job in jobs:
-                job.start()
-            spinner = spinner_generator()
-            start = time.time()
-            while len(jobs) > 0:
+        if doit:
+            CLI.header('Execute providers')
+
+            CLI.warn('WE NEED A SIGNAL HANDLER')
+
+            # Calling the providers of each infrastructure.
+            call_list = [(name, data['provider_dir'], args.command, data['build_dir']) for name, data in infrastructures.items()]
+            try:
+                jobs = [threading.Thread(target=execute_provider, args=(params,)) for params in call_list]
                 for job in jobs:
-                    CLI.print_fmt(f'Running: {len(jobs)}/{len(call_list)} ({round(time.time()-start,1)}s) {next(spinner)}', fmt=CLI.BOLD+CLI.CYAN, end='\r')
-                    if not job.is_alive():
-                        jobs.remove(job)
-                    time.sleep(.1)
+                    job.start()
+                spinner = spinner_generator()
+                start = time.time()
+                while len(jobs) > 0:
+                    for job in jobs:
+                        CLI.print_fmt(f'Running: {len(jobs)}/{len(call_list)} ({round(time.time()-start,1)}s) {next(spinner)}', fmt=CLI.BOLD+CLI.CYAN, end='\r')
+                        if not job.is_alive():
+                            jobs.remove(job)
+                        time.sleep(.1)
 
-        except Exception as err:
-            CLI.exit_on_error(f'[{datetime.datetime.now()}] Fatal error during provider execution: {err}', 3)
+            except Exception as err:
+                CLI.exit_on_error(f'[{datetime.datetime.now()}] Fatal error during provider execution: {err}', 3)
 
-        CLI.print_info(f'[{datetime.datetime.now()}] Deployment finished')
+            CLI.print_info(f'[{datetime.datetime.now()}] Deployment finished')
 
-    else:
-        CLI.exit_on_error('User interruption. Terminating.', 2)
+        else:
+            CLI.exit_on_error('User interruption. Terminating.', 2)
 
-    # Translate commands into terraform commands
-    #terraform_command = {'deploy': 'apply', 'destroy'}[sys.argv[1]]
+        # Translate commands into terraform commands
+        #terraform_command = {'deploy': 'apply', 'destroy'}[sys.argv[1]]
 
-    # WE HAVE TO DEAL WITH ERRORS FROM THE PROVIDER
-    # NOW WE HAVE TO TAKE THE PROVIDER RESULT AND PLACE IT FOR THE PROVISIONER
+        # WE HAVE TO DEAL WITH ERRORS FROM THE PROVIDER
+        # NOW WE HAVE TO TAKE THE PROVIDER RESULT AND PLACE IT FOR THE PROVISIONER
+
+    # This is the command to show the results of provider an provisioner runs.
+    if args.command == 'show':
+        pass
+
 
 
     # Bye.

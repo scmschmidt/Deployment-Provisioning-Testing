@@ -38,13 +38,13 @@ Ideas:
     - 
 
 ToDo:
-    - Schema needs improvement
-
+    - 
 
 
 Changelog:
 ----------
 01.08.2022      v0.1        - and so it begins...
+15.08.2022      v0.2        - Works so far and just needs minor adjustment.
 """
 
 import copy
@@ -349,8 +349,13 @@ def main():
     # Print greeting.
     log(f'''Running: {' '.join(sys.argv)} (Pid: {os.getpid()})''')
 
-    action = sys.argv[1]
-
+    # Check action and translate it into the terraform command.
+    
+    if sys.argv[1] not in ['deploy', 'destroy']:
+        log(f'Unknown action "{sys.argv[1]}"! Only "deploy" and "destroy" are supported.', 'fail')
+        bye(1)
+    action = 'apply' if sys.argv[1] == 'deploy' else sys.argv[1]
+   
     # Load and validate configuration file.
     config = load_and_validate('config')
 
@@ -374,7 +379,7 @@ def main():
     terraform(['plan', '-input=false'])
 
     # Depending on the command, we apply or destroy.
-    terraform([sys.argv[1], '-input=false', '-auto-approve'])
+    terraform([action, '-input=false', '-auto-approve'])
 
 
     # Create result file or ...
