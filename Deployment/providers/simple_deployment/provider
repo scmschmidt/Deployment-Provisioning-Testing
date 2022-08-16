@@ -13,17 +13,19 @@ This script gets called by `dpt` and relies on the following:
 - The current directory contains a YAML file 'config', containing
   the infrastructure description.
 
-- The current directory can freely used. Besides 'config' only the files
-  'stdout' and 'stderr' exists and are maintained by `dtp`, which writes
-  there the output of this command.
+- The "real" provider can be found in config['provider_args'].
 
-- The exit code defines, if this script was successful or not.
+- The current directory can freely used. Only the files 'provider'
+  (this script), the configuration 'config', 'output' and 'result.yaml'
+  are reserved.
 
-- Messages shall be written to stdout, errors to stderr.
-  The `dtp` program will capture both and write them in to the 
-  files mentioned before.
+- The exit code (0/1) defines, if this script was successful or not.
 
-- The provider must create a YAML file called 'result' in the current
+- Messages shall be written in a neat format (e.g. with timestamps) 
+  to stdout (including errors)
+  The `dtp` program will capture it and write the file 'output'
+
+- The provider must create a YAML file called 'result,yaml' in the current
   directory, which contains the IP addresses of the deployed machines.
   The `dtp` program will process the data further.
 
@@ -138,8 +140,8 @@ def load_and_validate(config_file: str) -> dict:
                 schema.Optional('os'): str,
                 schema.Optional('labels'): list
             }],
-            'images': { str: { str: str  } },
-            'sizing': { str: { str: str  } }
+            'images': { str: { str: str } },
+            'sizing': { str:  schema.Or({ str: str }, { str: { str: int } }) }
         }
 
     }, ignore_extra_keys=True)
@@ -164,7 +166,7 @@ def make_plan(config: dict) -> dict:
     It returns the updated config.
     """
 
-    template = f'''{config['provider_dir']}/templates/main.tf.template'''
+    template = f'''{config['provider_dir']}/templates/{config['provider_args']}-main.tf.template'''
     terraform_dir = 'terraform'
     terraform_file = f'{terraform_dir}/main.tf'
 
@@ -194,7 +196,7 @@ def make_plan(config: dict) -> dict:
         log(f'Generating machine description failed: {err}', 'fail')
         bye(1)
 
-    # Now we prepare a machine dict to be used by the template. LABELS ARE MISSING!!!!!!!
+    # Now we prepare a machine dict to be used by the template.
     machines = []
     for _, data in machine_definition.items():
         for name in data['names']:
@@ -232,6 +234,9 @@ def write_map(config: dict, section: str, file: str) -> None:
     Writes section of config into a file. 
     Either the 'default' subsection or the 'location` part is written
     into the file, depending if there is a location subsection.
+
+    Also the image file for AWS has a slightly different structure which 
+    has to taken into account.
     """
 
     try:
@@ -244,7 +249,12 @@ def write_map(config: dict, section: str, file: str) -> None:
             log(f'''Preparing "{file}": Section "{location}" found in config.''')
             
         with open(file, 'w') as f:
-            f.write(yaml.dump(config['config'][section][subsection]))
+            # For AWS we need to include the location!   !!!!!DEFAULT IS NOT SUPPORTED!!!!!!
+            if section == 'images' and config['provider_args'] == 'aws':
+                content = {location: config['config'][section][subsection]}
+            else:
+                content = config['config'][section][subsection]
+            f.write(yaml.dump(content))
     except Exception as err:
         log(f'Error writing "{section}" to file: {err}', 'fail')
         bye(1)
@@ -360,11 +370,12 @@ def main():
     config = load_and_validate('config')
 
     # Create terraform plan from templates.
-    make_plan(config)
+    config = make_plan(config)
+    pprint.pprint(config)
 
     # Generate/Save image and size files
-    write_map(config, 'images', 'terraform/images_azure.yaml')
-    write_map(config, 'sizing', 'terraform/sizing_azure.yaml')
+    write_map(config, 'images', f'''terraform/images_{config['provider_args']}.yaml''')
+    write_map(config, 'sizing', f'''terraform/sizing_{config['provider_args']}.yaml''')
 
     # Now we call terraform.
     # Recommendations for terraform options come from: 
@@ -381,15 +392,14 @@ def main():
     # Depending on the command, we apply or destroy.
     terraform([action, '-input=false', '-auto-approve'])
 
-
     # Create result file or ...
     if action == 'apply':
         json_output = terraform(['output', '-json'])
-        write_output_file('terraform/output.yaml', '\n'.join(json_output), config['config']['machines'])
+        write_output_file('result.yaml', '\n'.join(json_output), config['config']['machines'])
 
     # ... delete result file.
     if action == 'destroy':
-        delete('terraform/output.yaml')
+        delete('result.yaml')
 
     # Say good bye.
     bye(0)

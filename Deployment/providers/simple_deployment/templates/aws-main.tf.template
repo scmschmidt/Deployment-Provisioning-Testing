@@ -1,7 +1,7 @@
-module "simple_azure" {
+module "simple_aws" {
 
   # Path to the module.
-  source = "git::https://github.com/scmschmidt/simple_deployment.git//modules/simple_azure"
+  source = "git::https://github.com/scmschmidt/simple_deployment.git//modules/simple_aws"
   
   # Region and used subnet.
   location = "{{ location }}"
@@ -15,7 +15,6 @@ module "simple_azure" {
     {% for machine in machines %}    
     "{{ machine.shortname }}" = ["{{ machine.size }}", "{{ machine.os }}"]    {% endfor %}
   }
-
 
   # Keyboard settings.
   {% if keymap %}keymap = "{{ keymap }}"{% endif %}
@@ -32,16 +31,12 @@ module "simple_azure" {
   {% if enable_root_login %}enable_root_login = {{ enable_root_login|lower }}{% endif %}
 }
 
-
+# Return the name and IP address of each instance.
 output "machines" {
   value = [
-    for name, info in module.simple_azure.machine_info :
+    for name, info in module.simple_aws.machine_info :
     "${name} ${info.ip_address}"
   ]
   description = "Information about the instances."
   sensitive   = false
 }
-
-
-
-

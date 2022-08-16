@@ -48,6 +48,7 @@ from typing import Tuple, Any
 import yaml
 import jinja2
 
+# CAN BE REMOVED AFTER DEVELOPMENT.
 import pprint
 import time
 
@@ -198,7 +199,6 @@ def load_landscape(file: str) -> dict:
         env = jinja2.Environment(loader=jinja2.FileSystemLoader(dirname))
         template = env.get_template(filename)
         content = yaml.safe_load(template.render())
-        pprint.pprint(content)
     except Exception as err:
         CLI.exit_on_error(f'Error reading landscape: {err}', 2)
 
@@ -247,7 +247,8 @@ def validate(landscape: dict, base_path: str) -> dict:
     msgs = ['Error during provider validation:']
     errors = False
     for name, config in landscape.items():
-        provider_dir = f'''{base_path}/Deployment/providers/{config['provider']}'''
+        provider_name, provider_args = config['provider'].split()
+        provider_dir = f'''{base_path}/Deployment/providers/{provider_name}'''
         provider_path = f'{provider_dir}/provider'
         if not ( os.path.exists(provider_path) and os.access(provider_path, os.X_OK) ):
             msgs.append(f'''Provider "{config['provider']}": No executable "{provider_path}".''')
@@ -256,6 +257,7 @@ def validate(landscape: dict, base_path: str) -> dict:
         infrastructures[name] = {}
         infrastructures[name]['config'] = config
         infrastructures[name]['provider_dir'] = provider_dir
+        infrastructures[name]['provider_args'] = provider_args
         infrastructures[name]['build_dir'] = f'{os.getcwd()}/build/{name}'
         infrastructures[name]['config']['name'] = name
         CLI.ok(f'Infrastructure "{name}" configured.')
@@ -332,7 +334,7 @@ def main():
     infrastructures = validate(landscape, base_path)
 
     # Command switch.
-    sys.exit(0)
+    #sys.exit(0)
 
     # These are commands intended for the provider.
     if args.command in ['deploy', 'destroy']:
