@@ -8,7 +8,7 @@ module "simple_libvirt" {
   {% if subnet %}subnet   = "{{ subnet }}"{% endif %}
   
   # The name prefix for our resources.
-  name = "sschmidt-spielwiese"
+  name = "{{ name }}"
 
   # Map of the machines to create. Each machine has a unique id with a tuple of 'size' and 'image'.
   machines = {

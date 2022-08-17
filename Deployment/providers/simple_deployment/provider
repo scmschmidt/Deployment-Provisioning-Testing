@@ -52,6 +52,7 @@ Changelog:
 import copy
 import datetime
 import hashlib
+from ipaddress import ip_address
 import jinja2
 import json
 import os
@@ -75,7 +76,8 @@ def log(text: str, level: str='info' ) -> None:
     """
     category = {'info': 'INFO',
                 'success': ' OK ',
-                'fail': 'FAIL' 
+                'fail': 'FAIL',
+                'warn': 'WARN' 
                }[level]
     print(f'[{datetime.datetime.now()}] [{category}] {text}', file=sys.stdout)
 
@@ -116,6 +118,8 @@ def load_and_validate(config_file: str) -> dict:
         'build_dir': str,
         'provider_dir': str,
         'config': {
+
+            schema.Optional('skip_deploy'): bool,                                 
 
             # Azure requirement: may not contain the special characters: `\/"[]:|<>+=;,?*@&~!#$%^()_{}
             'name': schema.Regex('^[a-z.][a-z0-9.-]{1,40}$',
@@ -305,39 +309,44 @@ def terraform(command: list) -> None:
 
     return output     
 
-def write_output_file(filename: str, json_output: str, machine_config: dict) -> None:
+def update_config(config: dict, terraform_output: str, filename: str) -> None:
     """
-    Enhances the terraform JSON output of the created machines, and writes it as YAML
-    for further use.
-    The output will be enhanced with additional attributes from teh machine config.
+    Enriches the machines part of the config with the data from the
+    terraform output. and writes it into a file.
     """
-
-    output_new = {}
 
     try:
-        # Read JSON output.
-        output = json.loads(json_output)
+        # Read JSON output and create a lookup table
+        lookup_table = {}
+        for address_string in json.loads(terraform_output)['machines']['value']:
+            name, ip = address_string.split()
+            lookup_table[name] = ip        
 
-        # Walk through value section and transfer the hosts.
-        for entry in output['machines']['value']:
-            host, ip = entry.split(' ')
-            output_new[host] = { 'ip': ip }
+        # Walk through the machines and add the ip address.
+        lookup_failure = False
+        for machine in config['config']['machines']: 
+            if machine['name'] in lookup_table:
+               machine['ip_address'] = lookup_table[machine['name']]
+            else:
+                log(f'IP address of "{name}" not found in terraform output!', 'error')
+                lookup_failure = True 
 
-        # Add attributes from the config.
-        for machine in machine_config:
-            if machine['name'] in output_new:
-                output_new[machine['name']].update(machine)
+        # Lookup failures lead to an error.
+        if lookup_failure:
+            log(f'Some hosts have no IP address! Terminating.', 'error')
+            bye(1)
 
-        # Write the output as YAML file.
+        # Write the updated config.
         yaml.Dumper.ignore_aliases = lambda *args : True
         with open(filename, 'w') as f:
-            f.write(yaml.dump(output_new))
-
+            f.write(yaml.dump(config))
+        
     except Exception as err: 
-        log(f'Error creating output file "{filename}": {err}', 'fail')
+        log(f'Error creating updated config file "{filename}": {err}', 'fail')
         bye(1)
 
     log(f'File "{filename}" written.', 'success')
+
 
 def delete(filename: str) -> None:
     """
@@ -369,9 +378,13 @@ def main():
     # Load and validate configuration file.
     config = load_and_validate('config')
 
+    # Terminate premature if skip is true.
+    if 'skip_deploy' in config['config'] and config['config']['skip_deploy']:
+        log('Parameter "skip_deploy" is set to true. Skip provisioning!', 'warn')
+        bye(0)
+
     # Create terraform plan from templates.
     config = make_plan(config)
-    pprint.pprint(config)
 
     # Generate/Save image and size files
     write_map(config, 'images', f'''terraform/images_{config['provider_args']}.yaml''')
@@ -392,14 +405,14 @@ def main():
     # Depending on the command, we apply or destroy.
     terraform([action, '-input=false', '-auto-approve'])
 
-    # Create result file or ...
+    # In case of 'apply' we update the config.
     if action == 'apply':
-        json_output = terraform(['output', '-json'])
-        write_output_file('result.yaml', '\n'.join(json_output), config['config']['machines'])
+        terraform_output = '\n'.join(terraform(['output', '-json']))
+        update_config(config, terraform_output, 'config')
 
-    # ... delete result file.
+    # In case of 'apply' we delete the config.
     if action == 'destroy':
-        delete('result.yaml')
+        delete('config')
 
     # Say good bye.
     bye(0)

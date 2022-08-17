@@ -17,7 +17,8 @@ Ideas:
 
 ToDo:
     - We need to capture ^C   (atexit???)
-    - Provider requires implementation of "excluded_hosts" (terraform's lifecycle feature)
+    - Implement 'skip' for provisioner (as soon as we have provisioners coded...)
+    - Implementation of "excluded_hosts" for provider (terraform's lifecycle feature) and provisioner
     - Add commands for viewing the provider/provisioner outputs.
 
 
@@ -29,6 +30,7 @@ Changelog:
                               requires it. 
                             - The provider config gets created in the build directory.
 01.08.2022      v0.3        - So far we can start the providers.
+17.08.2022      v0.4        - Providers work as expected.
 """
 
 import argparse
@@ -168,20 +170,6 @@ def wait_for_key(text: str, mapping: dict) -> Any:
         if k in mapping.keys():
             return mapping[k]
 
-# DO WE NEED THIS???????)
-def load_config(config: str) -> dict:
-    """
-    Loads the config.
-    """
-    CLI.header('Load configuration ((DO WE NEED THIS???????)')
-    try: 
-        with open(config) as f:
-            content = yaml.safe_load(f.read())
-    except Exception as err:
-        CLI.exit_on_error(f'Error reading config: {err}', 2)
-    CLI.ok(f'Configuration "{config} loaded successfully.')
-    return content
-
 def load_landscape(file: str) -> dict:
     """
     Loads the given landscape file (YAML).
@@ -297,7 +285,7 @@ def execute_provider(provider_def: Tuple) -> None:
 
     try:
         start = time.time()
-        output_file = open(f'{build_dir}/output', 'w')
+        output_file = open(f'{build_dir}/output_provider', 'w')
         with subprocess.Popen([executable, command],
                               stdout=output_file, 
                               stderr = subprocess.STDOUT,
@@ -322,9 +310,6 @@ def main():
 
     # Parsing arguments.
     args = argument_parser()
-
-    # First we load the config.   DO WE REALLY NEED THIS??????????????????????????
-    config = load_config('.DTP/config')
 
     # Extract DTP base path from the link of this script.
     base_path = os.path.dirname(pathlib.Path(sys.argv[0]).resolve())
@@ -376,8 +361,6 @@ def main():
         else:
             CLI.exit_on_error('User interruption. Terminating.', 2)
 
-        # Translate commands into terraform commands
-        #terraform_command = {'deploy': 'apply', 'destroy'}[sys.argv[1]]
 
         # WE HAVE TO DEAL WITH ERRORS FROM THE PROVIDER
         # NOW WE HAVE TO TAKE THE PROVIDER RESULT AND PLACE IT FOR THE PROVISIONER

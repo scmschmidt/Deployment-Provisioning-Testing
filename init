@@ -25,23 +25,23 @@ for dir in "${config_dir}" "${build_dir}" ; do
     fi
 done
 
-# Create hidden config directory and config file in the current one.
-if ! touch "${config_file}" ; then 
-    echo "Could not create configuration file \"${config_file}\"! Cannot initialize here." >&2
-    exit 1
-fi
+# # Create hidden config directory and config file in the current one.
+# if ! touch "${config_file}" ; then 
+#     echo "Could not create configuration file \"${config_file}\"! Cannot initialize here." >&2
+#     exit 1
+# fi
 
 # The absolute path of the init script is the base directory for DTP.
 basepath=$(realpath -s "${0%/*}")
 
-# Writing base path to config.
-if ! echo "basepath: \"${basepath}\"" >> "${config_file}" ; then 
-    echo "Could not update configuration file \"${config_file}\"! Cannot initialize here." >&2
-    exit 1
-fi 
+# # Writing base path to config.
+# if ! echo "basepath: \"${basepath}\"" >> "${config_file}" ; then 
+#     echo "Could not update configuration file \"${config_file}\"! Cannot initialize here." >&2
+#     exit 1
+# fi 
 
-echo "Setting DTP path to: ${basepath}"
-echo "Configuration \"${config_file}\" created."
+# echo "Setting DTP path to: ${basepath}"
+# echo "Configuration \"${config_file}\" created."
 
 # Creating symlink to the binaries.
 if [ -e "${deploy_link}" ] ; then
