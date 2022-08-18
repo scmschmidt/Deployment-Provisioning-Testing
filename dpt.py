@@ -18,8 +18,9 @@ Ideas:
 ToDo:
     - We need to capture ^C   (atexit???)
     - Implement 'skip' for provisioner (as soon as we have provisioners coded...)
-    - Implementation of "excluded_hosts" for provider (terraform's lifecycle feature) and provisioner
-    - Add commands for viewing the provider/provisioner outputs.
+    - Implementation of "excluded_hosts" for provider and provisioner
+      For terraform this can get complicated: https://stackoverflow.com/questions/36403998/avoid-to-destroy-the-previously-created-resources
+    - Make provider/provisioner outputs more colorful (job of the provider/provisioner!)
 
 
 
@@ -31,11 +32,17 @@ Changelog:
                             - The provider config gets created in the build directory.
 01.08.2022      v0.3        - So far we can start the providers.
 17.08.2022      v0.4        - Providers work as expected.
+18.08.2022      v0.5        - Moving from argparse to docopt, even if the project hasn't seen
+                              updates in years. Makes life easier. The function argument_parser()
+                              remains, so it can be extended and used again, if docopt gets thrown out.
+                            - Implemented showing of provider/provisioner logs.  
 """
 
 import argparse
+from cmath import log
 import concurrent.futures
 import datetime
+import docopt
 import os
 import pathlib
 import re
@@ -46,13 +53,14 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from typing import Tuple, Any
 import yaml
 import jinja2
 
 # CAN BE REMOVED AFTER DEVELOPMENT.
 import pprint
-import time
+
 
 
 VERSION = 'v0.3'
@@ -123,31 +131,88 @@ def signal_handler(signal, frame):
     """
     print(threading.active_count() )
     time.sleep(3)
-    #sys.exit(1)
 
 def argument_parser() -> object:
     """
-    Parses the arguments and return the argparse object.
+    Parses the arguments and return the result object.
     """
 
-    parser = argparse.ArgumentParser(prog='dpt', 
-                                    usage='%(prog)s [--non-interactive] deploy|destroy LANDSCAPE_FILE',
-                                    description='Manages the landscape defined in the landscape file.',
-                                    epilog='')
-    parser.add_argument('command', 
-                        metavar='deploy|destroy',
-                        choices=['deploy', 'destroy'],
-                        help='Command to execute.')
-    parser.add_argument('landscape', 
-                        metavar='LANDSCAPE_FILE',
-                        nargs='?',
-                        default='landscapes/landscape.yaml',
-                        help='Path to the (YAML) landscape definition.')
-    parser.add_argument('--non-interactive', 
-                        dest='interactive',
-                        action='store_false',
-                        help='Do not ask for permission before altering the landscape.')
-    return parser.parse_args()
+#     parser = argparse.ArgumentParser(prog='dpt', 
+#                                     usage='%(prog)s [--non-interactive] deploy|destroy LANDSCAPE_FILE\n       %(prog)s showlog_provider PROVIDER\n       %(prog)s -h|--help',
+#                                     description='Manages the landscape defined in the landscape file.',
+#                                     epilog='')
+#     parser.add_argument('command', 
+#                         metavar='deploy|destroy',
+#                         choices=['deploy', 'destroy'],
+#                         help='Command to execute.')
+#     parser.add_argument('landscape', 
+#                         metavar='LANDSCAPE_FILE',
+#                         nargs='?',
+#                         default='landscapes/landscape.yaml',
+#                         help='Path to the (YAML) landscape definition.')
+#     parser.add_argument('--non-interactive', 
+#                         dest='interactive',
+#                         action='store_false',
+#                         help='Do not ask for permission before altering the landscape.')
+#     return parser.parse_args()
+
+    description = """
+    Usage:
+    dpt [--non-interactive] (deploy|destroy) LANDSCAPE_FILE
+    dpt (show-provider|show-provisioner) LANDSCAPE_FILE INFRASTRUCTURE
+    dpt -h|--help
+
+    Arguments:
+    LANDSCAPE_FILE         YAML file describing the landscape. 
+    INFRASTRUCTURE         Name of the infrastructure (part of the landscape)  
+
+    Commands:
+    deploy ...             Deploys the landscape defined by the landscape file.
+    destroy ...            Destroys the landscape defined by the landscape file.
+    show-provider ...      Shows the provider output (log) of the infrastructure.
+    show-provisioner ...   Shows the provisioner output (log) of the infrastructure.
+
+    Options:
+    -h --help              Show this help.
+    --non-interactive      Do not ask for permission before altering the landscape.
+    """
+
+    class MakeObject(object):
+        """
+        Converting the dict into an object to stay compatible with argparse.
+        Also we do some rewrites to stay compatible with older code, that  was
+        programmed with argparse instead of docopt.
+
+        - All keys are lowercase.
+        - We use 'landscape' instead of 'LANDSCAPE_FILE'.
+        - We use 'interactive' instead of '--non-interactive'.
+        - 'command' must be set to the selected command.
+        """
+      
+        def __init__(self, arguments):
+            command = None
+            for key in arguments:
+                if key == 'LANDSCAPE_FILE':
+                    new_key = 'landscape'
+                    value = arguments[key]
+                elif key == '--non-interactive':
+                    new_key = 'interactive'
+                    value = not arguments[key]
+                elif key in ['deploy', 'destroy', 'show-provider', 'show-provisioner'] and arguments[key]:
+                    command = key
+                    continue
+                else:
+                    new_key = key
+                    value = arguments[key]
+
+                setattr(self, new_key.lower(), value )
+                setattr(self, 'command', command)
+        
+        def __str__(self):
+            return str(vars(self))
+
+    # Parse and return the command line arguments.
+    return MakeObject(docopt.docopt(description, version=f'{VERSION}'))
 
 def spinner_generator() -> str:
     """
@@ -302,6 +367,18 @@ def execute_provider(provider_def: Tuple) -> None:
     except Exception as err:
         CLI.fail(err)
 
+def show_log(path: str) -> None:
+    """
+    Reads the file and prints it to stdout.
+    """
+
+    try:
+        with open(path, 'r') as f:
+            for line in f.readlines():
+                print(line.strip())
+    except Exception as err:
+        CLI.exit_on_error(f'Error reading log for infrastructure: {err}', 3)
+
 
 def main():
 
@@ -314,12 +391,23 @@ def main():
     # Extract DTP base path from the link of this script.
     base_path = os.path.dirname(pathlib.Path(sys.argv[0]).resolve())
 
+    # We shall show the results of a provider run.
+    if args.command == 'show-provider':
+
+        # Print log and terminate.
+        show_log(f'./build/{args.infrastructure}/output_provider')
+        sys.exit(0) 
+
+    # We shall show the results of a provisioner run.
+    if args.command == 'show-provisioner':
+
+        # Print log and terminate.
+        show_log(f'./build/{args.infrastructure}/output_provisioner')
+        sys.exit(0) 
+
     # Load and validate landscape.
     landscape = load_landscape(args.landscape)
     infrastructures = validate(landscape, base_path)
-
-    # Command switch.
-    #sys.exit(0)
 
     # These are commands intended for the provider.
     if args.command in ['deploy', 'destroy']:
@@ -362,12 +450,6 @@ def main():
             CLI.exit_on_error('User interruption. Terminating.', 2)
 
 
-        # WE HAVE TO DEAL WITH ERRORS FROM THE PROVIDER
-        # NOW WE HAVE TO TAKE THE PROVIDER RESULT AND PLACE IT FOR THE PROVISIONER
-
-    # This is the command to show the results of provider an provisioner runs.
-    if args.command == 'show':
-        pass
 
 
 
