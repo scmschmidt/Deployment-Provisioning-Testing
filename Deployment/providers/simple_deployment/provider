@@ -335,18 +335,20 @@ def update_config(config: dict, terraform_output: str, filename: str) -> None:
         if lookup_failure:
             log(f'Some hosts have no IP address! Terminating.', 'error')
             bye(1)
+    except Exception as err: 
+        log(f'Error updated config fith IP addresses of hosts: {err}', 'fail')
+        bye(1)
 
+    try:
         # Write the updated config.
         yaml.Dumper.ignore_aliases = lambda *args : True
         with open(filename, 'w') as f:
             f.write(yaml.dump(config))
-        
     except Exception as err: 
         log(f'Error creating updated config file "{filename}": {err}', 'fail')
         bye(1)
 
     log(f'File "{filename}" written.', 'success')
-
 
 def delete(filename: str) -> None:
     """
@@ -356,7 +358,7 @@ def delete(filename: str) -> None:
         try: 
             os.remove(filename)
         except Exception as err: 
-            log(f'Error removing unused file "{filename}": {err}', 'fail')
+            log(f'Error removing file "{filename}": {err}', 'fail')
             bye(1)
         log(f'File "{filename}" deleted.', 'success')
     else:
@@ -374,9 +376,12 @@ def main():
         log(f'Unknown action "{sys.argv[1]}"! Only "deploy" and "destroy" are supported.', 'fail')
         bye(1)
     action = 'apply' if sys.argv[1] == 'deploy' else sys.argv[1]
-   
+
+    # Delete any existing config generated for provisioners from previous runs.
+    delete('config_provisioner')
+
     # Load and validate configuration file.
-    config = load_and_validate('config')
+    config = load_and_validate('config_provider')
 
     # Terminate premature if skip is true.
     if 'skip_deploy' in config['config'] and config['config']['skip_deploy']:
@@ -408,11 +413,11 @@ def main():
     # In case of 'apply' we update the config.
     if action == 'apply':
         terraform_output = '\n'.join(terraform(['output', '-json']))
-        update_config(config, terraform_output, 'config')
+        update_config(config, terraform_output, config['provisioner_config'])
 
-    # In case of 'apply' we delete the config.
+    # In case of 'delete' we delete the config.
     if action == 'destroy':
-        delete('config')
+        delete('config_provider')
 
     # Say good bye.
     bye(0)

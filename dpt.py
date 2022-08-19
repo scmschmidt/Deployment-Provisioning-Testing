@@ -45,6 +45,7 @@ import datetime
 import docopt
 import os
 import pathlib
+import queue
 import re
 import readchar
 import schema
@@ -159,7 +160,8 @@ def argument_parser() -> object:
     description = """
     Usage:
     dpt [--non-interactive] (deploy|destroy) LANDSCAPE_FILE
-    dpt (show-provider|show-provisioner) LANDSCAPE_FILE INFRASTRUCTURE
+    dpt [--non-interactive] provide LANDSCAPE_FILE
+    dpt (show-provider|show-provisioner) INFRASTRUCTURE
     dpt -h|--help
 
     Arguments:
@@ -169,6 +171,7 @@ def argument_parser() -> object:
     Commands:
     deploy ...             Deploys the landscape defined by the landscape file.
     destroy ...            Destroys the landscape defined by the landscape file.
+    provide ...            Provides the landscape defined by the landscape file.
     show-provider ...      Shows the provider output (log) of the infrastructure.
     show-provisioner ...   Shows the provisioner output (log) of the infrastructure.
 
@@ -190,6 +193,7 @@ def argument_parser() -> object:
         """
       
         def __init__(self, arguments):
+            
             command = None
             for key in arguments:
                 if key == 'LANDSCAPE_FILE':
@@ -198,7 +202,7 @@ def argument_parser() -> object:
                 elif key == '--non-interactive':
                     new_key = 'interactive'
                     value = not arguments[key]
-                elif key in ['deploy', 'destroy', 'show-provider', 'show-provisioner'] and arguments[key]:
+                elif key in ['deploy', 'destroy', 'provide', 'show-provider', 'show-provisioner'] and arguments[key]:
                     command = key
                     continue
                 else:
@@ -206,6 +210,10 @@ def argument_parser() -> object:
                     value = arguments[key]
 
                 setattr(self, new_key.lower(), value )
+            
+            if not command:
+                CLI.exit_on_error(f'Could not determine the command!', 2)
+            else:
                 setattr(self, 'command', command)
         
         def __str__(self):
@@ -300,18 +308,45 @@ def validate(landscape: dict, base_path: str) -> dict:
     msgs = ['Error during provider validation:']
     errors = False
     for name, config in landscape.items():
-        provider_name, provider_args = config['provider'].split()
+
+        build_dir = f'{os.getcwd()}/build/{name}'
+
+        # Generate a few needed provider data.
+        try:
+            provider_name, provider_args = config['provider'].split()
+        except ValueError:
+            provider_name = config['provider']
+            provider_args = None
         provider_dir = f'''{base_path}/Deployment/providers/{provider_name}'''
         provider_path = f'{provider_dir}/provider'
         if not ( os.path.exists(provider_path) and os.access(provider_path, os.X_OK) ):
             msgs.append(f'''Provider "{config['provider']}": No executable "{provider_path}".''')
             errors = True
             continue 
+        
+        # Generate a few needed provisioner data.
+        try:
+            provisioner_name, provisioner_args = config['provisioner'].split()
+        except ValueError:
+            provisioner_name = config['provisioner']
+            provisioner_args = None
+        provisioner_dir = f'''{base_path}/Provisioning/provisioners/{provisioner_name}'''
+        provisioner_path = f'{provisioner_dir}/provisioner'
+        provisioner_config = f'''{build_dir}/config_provisioner'''
+        if not ( os.path.exists(provisioner_path) and os.access(provisioner_path, os.X_OK) ):
+            msgs.append(f'''Provisioner "{config['provisioner']}": No executable "{provisioner_path}".''')
+            errors = True
+            continue 
+
+        # Enhance infrastructure with the generated data.
         infrastructures[name] = {}
         infrastructures[name]['config'] = config
         infrastructures[name]['provider_dir'] = provider_dir
         infrastructures[name]['provider_args'] = provider_args
-        infrastructures[name]['build_dir'] = f'{os.getcwd()}/build/{name}'
+        infrastructures[name]['provisioner_dir'] = provisioner_dir
+        infrastructures[name]['provisioner_config'] = provisioner_config
+        infrastructures[name]['provider_args'] = provider_args
+        infrastructures[name]['build_dir'] = build_dir
         infrastructures[name]['config']['name'] = name
         CLI.ok(f'Infrastructure "{name}" configured.')
     if errors: 
@@ -331,13 +366,13 @@ def setup_infrastructures(infrastructures: dir) -> None:
         try:
             if not os.path.exists(infrastructures[infrastructure]['build_dir']):
                 os.mkdir(infrastructures[infrastructure]['build_dir'], mode = 0o700)
-            with open(f'''{infrastructures[infrastructure]['build_dir']}/config''', 'w') as f: 
+            with open(f'''{infrastructures[infrastructure]['build_dir']}/config_provider''', 'w') as f: 
                 f.write(yaml.safe_dump(infrastructures[infrastructure]))
         except Exception as err:
             CLI.exit_on_error(f'Error setting up build directory for infrastructure "{infrastructure}": {err}', 2)
         CLI.ok(f'''Build directory for infrastructure "{infrastructure}" has bee set up at "{infrastructures[infrastructure]['build_dir']}".''')
 
-def execute_provider(provider_def: Tuple) -> None:
+def execute(task_definition: Tuple, q) -> None:
     """
     Calls the given executable with the command and the config file as listed
     in the given tuple.
@@ -345,27 +380,56 @@ def execute_provider(provider_def: Tuple) -> None:
     an info about the running process periodically to show life.
     """
 
-    name, provider_dir, command, build_dir = provider_def
-    executable = f'{provider_dir}/provider'
+    category, name, provider_dir, command, build_dir = task_definition
+    executable = f'{provider_dir}/{category}'
 
     try:
         start = time.time()
-        output_file = open(f'{build_dir}/output_provider', 'w')
+        output_file = open(f'{build_dir}/output_{category}', 'w')
         with subprocess.Popen([executable, command],
                               stdout=output_file, 
                               stderr = subprocess.STDOUT,
                               cwd=build_dir,  
                              ) as proc:
-            CLI.print_info(f'[{datetime.datetime.now()}] Provider for "{name}" has been started. (PID: {proc.pid})')
+            CLI.print_info(f'[{datetime.datetime.now()}] {category.capitalize()} for "{name}" has been started. (PID: {proc.pid})')
             proc.wait()
         output_file.close()
         end = time.time()
         if proc.returncode == 0:
-            CLI.ok(f'Provider for "{name}" has terminated successfully. (Executed in {round(end-start, 1)}s)')
+            CLI.ok(f'{category.capitalize()} for "{name}" has terminated successfully. (Executed in {round(end-start, 1)}s)')
         else:
-            CLI.fail(f'Provider for "{name}" failed with exit code {proc.returncode}! (Executed in {round(end-start, 1)}s)\n\t-> See "{output_file.name}" for details')
+            CLI.fail(f'{category.capitalize()} for "{name}" failed with exit code {proc.returncode}! (Executed in {round(end-start, 1)}s)\n\t-> Run "./dpt show-{category} {name}" for details')
+            q.put(True)
     except Exception as err:
-        CLI.fail(err)
+        CLI.fail(f'Could not execute {category} for landscape "{name}": {err}')
+        q.put(True)
+
+def fire_threads(call_list: list) -> bool:
+    """
+    Start all threads in the call list in parallel and waiting for termination.
+    The progress will be shown by a spinner.
+
+    Returns True if *all* threads terminated successfully else False.
+    """
+    try:              
+        q = queue.Queue()
+        jobs = [threading.Thread(target=execute, args=(params, q)) for params in call_list]
+        for job in jobs:
+            job.start()
+        spinner = spinner_generator()
+        start = time.time()
+        while len(jobs) > 0:
+            for job in jobs:
+                CLI.print_fmt(f'Running: {len(jobs)}/{len(call_list)} ({round(time.time()-start,1)}s) {next(spinner)}', fmt=CLI.BOLD+CLI.CYAN, end='\r')
+                if not job.is_alive():
+                    jobs.remove(job)
+                time.sleep(.1)
+        thread_errors  = [q.get() for _ in range(q.qsize())]       
+        if True in thread_errors:
+            return False
+    except Exception as err:
+        CLI.exit_on_error(f'[{datetime.datetime.now()}] Fatal error during execution: {err}', 3)
+    return True
 
 def show_log(path: str) -> None:
     """
@@ -409,52 +473,43 @@ def main():
     landscape = load_landscape(args.landscape)
     infrastructures = validate(landscape, base_path)
 
-    # These are commands intended for the provider.
+    # Now only commands follow, which have a destructive nature,
+    # so we ask for permission.
+    if args.interactive and not wait_for_key("Shall we deploy? [Y|n]", { 'Y': True, 'n': False}):
+        CLI.exit_on_error('User interruption. Terminating.', 2)
+    
+    # We shall do something with the provider.
     if args.command in ['deploy', 'destroy']:
 
         # Create working data for the providers.
         setup_infrastructures(infrastructures)
 
-        # If in interactive mode, we aks before we call to action.
-        if args.interactive:
-            doit = wait_for_key("Shall we deploy? [Y|n]", { 'Y': True, 'n': False}) 
-        else:
-            doit = True
+        CLI.header('Execute providers')
 
-        if doit:
-            CLI.header('Execute providers')
+        # Calling the providers of each infrastructure.
+        if not fire_threads([('provider', name, data['provider_dir'], args.command, data['build_dir']) for name, data in infrastructures.items()]):
+            CLI.exit_on_error(f'[{datetime.datetime.now()}] Deployment failed', 3)
 
-            CLI.warn('WE NEED A SIGNAL HANDLER')
+        # Bye.
+        CLI.print_info(f'[{datetime.datetime.now()}] Deployment finished')
+        sys.exit(0)
+    
+    # We shall do something with the provisioner.
+    if args.command == 'provide':
 
-            # Calling the providers of each infrastructure.
-            call_list = [(name, data['provider_dir'], args.command, data['build_dir']) for name, data in infrastructures.items()]
-            try:
-                jobs = [threading.Thread(target=execute_provider, args=(params,)) for params in call_list]
-                for job in jobs:
-                    job.start()
-                spinner = spinner_generator()
-                start = time.time()
-                while len(jobs) > 0:
-                    for job in jobs:
-                        CLI.print_fmt(f'Running: {len(jobs)}/{len(call_list)} ({round(time.time()-start,1)}s) {next(spinner)}', fmt=CLI.BOLD+CLI.CYAN, end='\r')
-                        if not job.is_alive():
-                            jobs.remove(job)
-                        time.sleep(.1)
+        CLI.header('Execute provisioners')
 
-            except Exception as err:
-                CLI.exit_on_error(f'[{datetime.datetime.now()}] Fatal error during provider execution: {err}', 3)
+        # Calling the provisioners of each infrastructure.
+        if not fire_threads([('provisioner', name, data['provisioner_dir'], args.command, data['build_dir']) for name, data in infrastructures.items()]):
+            CLI.exit_on_error(f'[{datetime.datetime.now()}] Provisioning failed.', 3)
 
-            CLI.print_info(f'[{datetime.datetime.now()}] Deployment finished')
-
-        else:
-            CLI.exit_on_error('User interruption. Terminating.', 2)
-
-
-
-
+        # Bye.
+        CLI.print_info(f'[{datetime.datetime.now()}] Provisioning finished')
+        sys.exit(0)
 
     # Bye.
-    sys.exit(0)
+    CLI.exit_on_error(f'No action done. Command "{args.command}" seems to be unknown...', 2)
+
 
 if __name__ == '__main__':
     main()
