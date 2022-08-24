@@ -125,9 +125,9 @@ def load_and_validate(config_file: str) -> dict:
             'name': schema.Regex('^[a-z.][a-z0-9.-]{1,40}$',
                                  error='"name" must be a string matching "^[a-z.][a-z0-9.-]{1,40}$".'),
             schema.Optional('update_provider'): bool,                                 
-            schema.Optional('admin_user'): schema.Regex('^[a-z][-a-z0-9]*$',
+            schema.Optional('remote_user'): schema.Regex('^[a-z][-a-z0-9]*$',
                                                        error='"name" must be a string matching "^[a-z.][a-z0-9.-]{1,40}$".'),
-            'admin_user_key': str,
+            'remote_user_public_key_file': str, 
             schema.Optional('enable_root_login'): bool,
             schema.Optional('keymap'): str,
             'location': str,
@@ -212,6 +212,14 @@ def make_plan(config: dict) -> dict:
                 'labels': data['config']['labels'] if 'labels' in data['config'] else None
             })
     config['config']['machines'] = machines
+
+    # Read the content of 'remote_user_public_key_file' to put it into the template.
+    try:
+        with open(os.path.expanduser(config['config']['remote_user_public_key_file']), 'r') as f:
+            config['config']['admin_user_key'] = ''.join(f.readlines()).strip()
+    except Exception as err:
+        log(f'Error reading public key for remote user: {err}', 'fail')
+        bye(1)  
 
     # Fill in the template.
     try: 
@@ -426,3 +434,4 @@ def main():
 if __name__ == '__main__':
     main()
 
+# host_key_checking = False

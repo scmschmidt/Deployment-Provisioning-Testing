@@ -20,7 +20,7 @@ module "simple_libvirt" {
   {% if keymap %}keymap = "{{ keymap }}"{% endif %}
 
   # Our logon user with SSH public key.
-  {% if admin_user %}admin_user     = "{{ admin_user }}"{% endif %}
+  {% if admin_user %}admin_user     = "{{ remote_user }}"{% endif %}
   admin_user_key = "{{ admin_user_key }}" 
 
   # Server and key to register the SLES.

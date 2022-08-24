@@ -21,6 +21,8 @@ ToDo:
     - Implementation of "excluded_hosts" for provider and provisioner
       For terraform this can get complicated: https://stackoverflow.com/questions/36403998/avoid-to-destroy-the-previously-created-resources
     - Make provider/provisioner outputs more colorful (job of the provider/provisioner!)
+    - A "preview_config" command can be useful to show the generated config
+
 
 
 
