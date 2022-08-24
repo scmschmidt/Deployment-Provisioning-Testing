@@ -1,0 +1,8 @@
+[defaults]
+remote_user            = {{ remote_user }}
+host_key_checking      = False
+log_path               = ansible.log
+become_allow_same_user = True
+
+
+

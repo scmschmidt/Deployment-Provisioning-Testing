@@ -126,7 +126,7 @@ def load_and_validate(config_file: str) -> dict:
                                  error='"name" must be a string matching "^[a-z.][a-z0-9.-]{1,40}$".'),
             schema.Optional('update_provider'): bool,                                 
             schema.Optional('remote_user'): schema.Regex('^[a-z][-a-z0-9]*$',
-                                                       error='"name" must be a string matching "^[a-z.][a-z0-9.-]{1,40}$".'),
+                                                         error='"remote_user" must be a string matching "^[a-z][-a-z0-9]*$".'),
             'remote_user_public_key_file': str, 
             schema.Optional('enable_root_login'): bool,
             schema.Optional('keymap'): str,

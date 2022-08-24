@@ -23,19 +23,20 @@ Changelog:
 """
 
 # import copy
+from collections import defaultdict
 import datetime
 # import hashlib
 # from ipaddress import ip_address
-# import jinja2
+import jinja2
 # import json
 import os
-# import schema
+import schema
 # import subprocess
 import sys
 # import time
 # import random
 import yaml
-
+from yaml.representer import Representer
 import pprint
 
 
@@ -87,68 +88,116 @@ def load_and_validate(config_file: str) -> dict:
         bye(1)
 
     # Validate against schema.
-    # config_schema = schema.Schema({
-    #     'build_dir': str,
-    #     'provider_dir': str,
-    #     'config': {
+    config_schema = schema.Schema({
+        'build_dir': str,
+        'provider_dir': str,
+        'config': {
 
-    #         schema.Optional('skip_deploy'): bool,                                 
+            schema.Optional('skip_deploy'): bool,                                 
 
-    #         # Azure requirement: may not contain the special characters: `\/"[]:|<>+=;,?*@&~!#$%^()_{}
-    #         'name': schema.Regex('^[a-z.][a-z0-9.-]{1,40}$',
-    #                              error='"name" must be a string matching "^[a-z.][a-z0-9.-]{1,40}$".'),
-    #         schema.Optional('update_provider'): bool,                                 
-    #         schema.Optional('admin_user'): schema.Regex('^[a-z][-a-z0-9]*$',
-    #                                                    error='"name" must be a string matching "^[a-z.][a-z0-9.-]{1,40}$".'),
-    #         'admin_user_key': str,
-    #         schema.Optional('enable_root_login'): bool,
-    #         schema.Optional('keymap'): str,
-    #         'location': str,
-    #         'provider': str,
-    #         schema.Optional('registration_server'): str,
-    #         schema.Optional('subnet'): schema.Regex('^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$',
-    #                                                 error='Must be a subnet declaration in the form: A.B.C.D/M'),
-    #         schema.Optional('subscription_registration_key'): str,
-    #         'hosts': [{
-    #            'count': schema.And(int, 
-    #                                 lambda n: True if isinstance(n, int) and n >= 1 else False,
-    #                                 error='"count" must be an integer greater than 1'),
-    #             schema.Optional('size'): str,
-    #             schema.Optional('os'): str,
-    #             schema.Optional('labels'): list
-    #         }],
-    #         'images': { str: { str: str } },
-    #         'sizing': { str:  schema.Or({ str: str }, { str: { str: int } }) }
-    #     }
-    # }, ignore_extra_keys=True)
-    # try:
-    #     config_schema.validate(content)
-    # except schema.SchemaError as se:
-    #     msgs = ['Errors during schema validation:'] 
-    #     for err in se.errors + se.autos:
-    #         if err:
-    #             msgs.append(err)
-    #     log('\n\t'.join(msgs), 'fail')
-    #     bye(1)
-    # log('Schema validation passed.')
+            'name': str,
+            schema.Optional('remote_user'): schema.Regex('^[a-z][-a-z0-9]*$',
+                                                         error='"remote_user" must be a string matching "^[a-z][-a-z0-9]*$".'),
+            'remote_user_public_key_file': str, 
+            'remote_user_private_key_file': str, 
+            schema.Optional('ssh_common_args'): schema.Or(str, None),
+            schema.Optional('ssh_extra_args'): schema.Or(str, None),
+            schema.Optional('scp_extra_args'): schema.Or(str, None),
+            'playbooks': list
+        }
+    }, ignore_extra_keys=True)
+    try:
+        config_schema.validate(content)
+    except schema.SchemaError as se:
+        msgs = ['Errors during schema validation:'] 
+        for err in se.errors + se.autos:
+            if err:
+                msgs.append(err)
+        log('\n\t'.join(msgs), 'fail')
+        bye(1)
+    log('Schema validation passed.')
 
     return content
 
-def make_inventory(config: dict) -> dict:
+def make_working_dir(config: dir) -> None:
     """
-    Uses config and the templates to create 
-    am inventory file for Ansible.
-
-    It returns the updated config.
+    Creates the working directory for Ansible.
     """
-    # All hosts are part of the 'all' group
-    # There is a group for each 'size' and 'os'.
-    # There is a group for each label.
-    pass
-    #for host in config[]
+
+    # Create ansible working directory, if not exist.
+    try:
+        if not os.path.exists(config['ansible_working_dir']):
+            os.mkdir(config['ansible_working_dir'])
+    except Exception as err:
+        log(f'Could not create Ansible working directory: {err}', 'fail')
+        bye(1)    
 
 
-  
+def make_config(config: dict) -> None:
+    """
+    Creates ansible.cfg.
+    """
+
+    ansible_config_file = f'''{config['ansible_working_dir']}/ansible.cfg'''
+    template = f'''{config['provisioner_dir']}/templates/ansible.cfg.template'''
+
+    # Fill in the template.
+    try: 
+        with open(template) as f:
+            ansible_config = jinja2.Template(f.read()).render(config['config'])
+    except Exception as err:
+        log(f'Error reading landscape: {err}', 'fail')
+        bye(1)
+
+    # Save Ansible config.
+    try:
+        with open(ansible_config_file, 'w') as f:
+            f.write(ansible_config)
+    except Exception as err:
+        log(f'Error writing the plan file: {err}', 'fail')
+        bye(1)
+
+def make_inventory(config: dict) -> None:
+    """
+    Uses config to create the inventory file for Ansible.
+    """
+
+    ansible_inventory_file = f'''{config['ansible_working_dir']}/inventory'''
+    host_groups = defaultdict(lambda: defaultdict(list))
+
+    # Walk through the machines.
+    pprint.pprint(config['config']['machines']) 
+    try:
+        for machine in config['config']['machines']:
+            host_entry = { machine['shortname']: machine['ip_address'] }
+            host_groups[machine['os']]['hosts'].append(host_entry)
+            #host_groups[machine['os']]['hosts'].append(machine['shortname'])
+            host_groups[machine['size']]['hosts'].append(host_entry)
+            #host_groups[machine['size']]['hosts'].append(machine['shortname'])
+            if machine['labels']:
+                for label in machine['labels']:
+                    #host_groups[label]['hosts'].append(machine['shortname'])
+                    host_groups[label]['hosts'].append(host_entry)
+    except Exception as err:
+        log(f'Error building the inventory: {err}', 'fail')
+        bye(1)
+
+    # Write the inventory.
+    yaml.add_representer(defaultdict, Representer.represent_dict)
+    try:
+        with open(ansible_inventory_file, 'w') as f:
+            f.write(yaml.dump(dict(host_groups)))
+    except Exception as err:
+        log(f'Error writing the inventory file: {err}', 'fail')
+        bye(1)
+
+def run_playbooks(config: dict) -> None:
+    """
+    Executes all playbooks in config sequentially.
+    """
+
+    for playbook in config['config']['playbooks']:
+        print(playbook)
 
 def delete(filename: str) -> None:
     """
@@ -180,13 +229,19 @@ def main():
     # Load and validate configuration file.
     config = load_and_validate('config_provisioner')
 
+    # Set working directory and create it
+    config['ansible_working_dir'] = './ansible'
+    make_working_dir(config)
+
+    # Create Ansible configuration.
+    make_config(config)
+
     # Build inventory from template.
     make_inventory(config)
 
-    
-    # Make Ansible working directory....
+    # Run playbooks
+    run_playbooks(config)
 
-    # Run playbook
 
 
 
