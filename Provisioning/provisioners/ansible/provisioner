@@ -103,13 +103,14 @@ def load_and_validate(config_file: str) -> dict:
             # From https://docs.ansible.com/ansible/latest/user_guide/playbooks_variables.html#creating-valid-variable-names:
             # A variable name can only include letters, numbers, and underscores. Python keywords or playbook keywords are not valid variable names. A variable name cannot begin with a number.
 
-            # Content of all 'os', 'size' and all labels are affected!!!!!
-
             'machines': [
                 { 'ip_address': str,   
-                   'labels': schema.Or(None, [ str ]),
-                   'os': str,
-                   'size': str,
+                   'labels': schema.Or(None, [schema.Regex('^[a-zA-Z_][a-zA-Z_0-9]*$',
+                                                           error='Labels" must be a string matching "^[a-zA-Z_][a-zA-Z_0-9]*$".')]),
+                   'os': schema.Regex('^[a-zA-Z_][a-zA-Z_0-9]*$',
+                                      error='Labels" must be a string matching "^[a-zA-Z_][a-zA-Z_0-9]*$".'),
+                   'size': schema.Regex('^[a-zA-Z_][a-zA-Z_0-9]*$',
+                                        error='Labels" must be a string matching "^[a-zA-Z_][a-zA-Z_0-9]*$".'),
                    'shortname': str,
                    'name': str
                 }
