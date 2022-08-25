@@ -350,6 +350,7 @@ def validate(landscape: dict, base_path: str) -> dict:
         infrastructures[name]['provider_args'] = provider_args
         infrastructures[name]['build_dir'] = build_dir
         infrastructures[name]['config']['name'] = name
+        infrastructures[name]['project_path'] = os.getcwd()
         CLI.ok(f'Infrastructure "{name}" configured.')
     if errors: 
         CLI.exit_on_error('\n\t'.join(msgs), 2)

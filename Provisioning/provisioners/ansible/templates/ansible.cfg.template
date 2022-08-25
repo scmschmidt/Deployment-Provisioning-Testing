@@ -1,8 +1,11 @@
 [defaults]
-remote_user            = {{ remote_user }}
 host_key_checking      = False
 log_path               = ansible.log
 become_allow_same_user = True
-
-
-
+interpreter_python     = auto_silent
+any_errors_fatal       = True
+remote_user            = {{ remote_user }}   
+{% if remote_user_private_key_file %}private_key_file       = {{ remote_user_private_key_file  }}{% endif %}
+{% if ssh_common_args %}ssh_common_args        = {{ ssh_common_args  }}{% endif %}
+{% if ssh_extra_args %}ssh_extra_args         = {{ ssh_extra_args  }}{% endif %}
+{% if scp_extra_args %}scp_extra_args         = {{ scp_extra_args  }}{% endif %}

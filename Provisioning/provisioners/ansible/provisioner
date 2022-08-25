@@ -22,22 +22,17 @@ Changelog:
 19.08.2022      v0.1        - and so it begins...
 """
 
-# import copy
+
 from collections import defaultdict
 import datetime
-# import hashlib
-# from ipaddress import ip_address
+from pickletools import string1
 import jinja2
-# import json
 import os
 import schema
-# import subprocess
+import subprocess
 import sys
-# import time
-# import random
 import yaml
 from yaml.representer import Representer
-import pprint
 
 
 VERSION = 'v0.1'
@@ -103,7 +98,22 @@ def load_and_validate(config_file: str) -> dict:
             schema.Optional('ssh_common_args'): schema.Or(str, None),
             schema.Optional('ssh_extra_args'): schema.Or(str, None),
             schema.Optional('scp_extra_args'): schema.Or(str, None),
-            'playbooks': list
+            'playbooks': list,
+
+            # From https://docs.ansible.com/ansible/latest/user_guide/playbooks_variables.html#creating-valid-variable-names:
+            # A variable name can only include letters, numbers, and underscores. Python keywords or playbook keywords are not valid variable names. A variable name cannot begin with a number.
+
+            # Content of all 'os', 'size' and all labels are affected!!!!!
+
+            'machines': [
+                { 'ip_address': str,   
+                   'labels': schema.Or(None, [ str ]),
+                   'os': str,
+                   'size': str,
+                   'shortname': str,
+                   'name': str
+                }
+            ]
         }
     }, ignore_extra_keys=True)
     try:
@@ -163,21 +173,17 @@ def make_inventory(config: dict) -> None:
     """
 
     ansible_inventory_file = f'''{config['ansible_working_dir']}/inventory'''
-    host_groups = defaultdict(lambda: defaultdict(list))
+    host_groups = defaultdict(lambda: defaultdict(dict))
 
     # Walk through the machines.
-    pprint.pprint(config['config']['machines']) 
     try:
         for machine in config['config']['machines']:
-            host_entry = { machine['shortname']: machine['ip_address'] }
-            host_groups[machine['os']]['hosts'].append(host_entry)
-            #host_groups[machine['os']]['hosts'].append(machine['shortname'])
-            host_groups[machine['size']]['hosts'].append(host_entry)
-            #host_groups[machine['size']]['hosts'].append(machine['shortname'])
+            host_entry = { 'ansible_host': machine['ip_address'] }
+            host_groups[machine['os']]['hosts'][machine['shortname']] = host_entry 
+            host_groups[machine['size']]['hosts'][machine['shortname']] = host_entry 
             if machine['labels']:
-                for label in machine['labels']:
-                    #host_groups[label]['hosts'].append(machine['shortname'])
-                    host_groups[label]['hosts'].append(host_entry)
+               for label in machine['labels']:
+                   host_groups[label]['hosts'][machine['shortname']] = host_entry 
     except Exception as err:
         log(f'Error building the inventory: {err}', 'fail')
         bye(1)
@@ -197,21 +203,45 @@ def run_playbooks(config: dict) -> None:
     """
 
     for playbook in config['config']['playbooks']:
-        print(playbook)
 
-def delete(filename: str) -> None:
-    """
-    Simply deletes a file.
-    """
-    if os.path.exists(filename):
-        try: 
-            os.remove(filename)
-        except Exception as err: 
-            log(f'Error removing file "{filename}": {err}', 'fail')
-            bye(1)
-        log(f'File "{filename}" deleted.', 'success')
-    else:
-        log(f'File "{filename}" does not exist. Nothing to delete.', 'success')
+        # If the playbook starts with $ it shall come from the library, otherwise
+        # it is considered a path relative to the project directory.
+        if playbook.startswith('$'):
+            playbook = f'''{config['provisioner_dir']}/library/{playbook[1:]}'''
+        else:
+            playbook = f'''{config['project_path']}/{playbook}''' 
+
+        environment = os.environ.copy()
+        environment['ANSIBLE_CONFIG'] = 'ansible.cfg'
+        
+        command = ['ansible-playbook', '-i', 'inventory', f'{playbook}']
+        command_string = ' ' .join(command)
+
+        output = []
+
+        log(f'Run now "{command_string}"')
+        try:
+            with subprocess.Popen(command, 
+                                stdout = subprocess.PIPE, 
+                                stderr = subprocess.STDOUT,
+                                encoding = 'utf-8',
+                                cwd = config['ansible_working_dir'],
+                                env = environment
+                                ) as proc:
+                while proc.poll() is None:
+                    for line in proc.stdout.readlines():
+                        log(f'{command_string}: {line.strip()}')  
+                        output.append(line.strip())
+
+                if proc.returncode != 0:
+                    raise ValueError(f'Ansible exited with return code {proc.returncode}.')
+
+                if [x for x in output if x.startswith('[WARNING]')]:
+                    raise ValueError(f'Playbook triggered warnings!.')
+                            
+        except Exception as err:
+            log(f'Execution of "{command_string}" failed: {err}', 'fail')
+            bye(1) 
 
 
 def main():
@@ -242,12 +272,8 @@ def main():
     # Run playbooks
     run_playbooks(config)
 
-
-
-
     # Say good bye.
     bye(0)
-
 
 
 
